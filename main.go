@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -102,9 +103,10 @@ func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
 			}
 			certs = append(certs, cert)
 
-			// Encode PEM block to string
 			var buf bytes.Buffer
-			pem.Encode(&buf, block)
+			if err := pem.Encode(&buf, block); err != nil {
+				return nil, nil, fmt.Errorf("failed to encode PEM block: %w", err)
+			}
 			pems = append(pems, buf.String())
 		}
 		data = rest
@@ -169,13 +171,7 @@ func orderChainDetails(certs []*CertDetails) []*CertDetails {
 		if parent == nil {
 			break
 		}
-		contains := false
-		for _, c := range ordered {
-			if c == parent {
-				contains = true
-				break
-			}
-		}
+		contains := slices.Contains(ordered, parent)
 		if contains {
 			break
 		}
@@ -197,21 +193,22 @@ func printChainTree(ordered []*CertDetails) {
 
 	// Print from Root to Leaf
 	n := len(ordered)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		idx := n - 1 - i
 		cert := ordered[idx]
 		indent := strings.Repeat("  ", i)
 
 		var label string
-		if i == 0 {
+		switch i {
+		case 0:
 			if cert.IsSelfSigned {
 				label = fmt.Sprintf("%s[Root]%s        ", Cyan, Reset)
 			} else {
 				label = fmt.Sprintf("%s[Anchor]%s      ", Yellow, Reset)
 			}
-		} else if i == n-1 {
+		case n - 1:
 			label = fmt.Sprintf("%s[Leaf]%s        ", Green, Reset)
-		} else {
+		default:
 			label = fmt.Sprintf("%s[Interm %d]%s    ", Yellow, n-1-i, Reset)
 		}
 
@@ -270,14 +267,15 @@ func verifySignaturesDetails(ordered []*CertDetails) error {
 }
 
 func getCertRoleName(index, total int, isSelfSigned bool) string {
-	if index == 0 {
+	switch index {
+	case 0:
 		return "Leaf"
-	} else if index == total-1 {
+	case total - 1:
 		if isSelfSigned {
 			return "Root (Self-Signed)"
 		}
 		return "Root/Anchor (Not Self-Signed)"
-	} else {
+	default:
 		return fmt.Sprintf("Intermediate %d", index)
 	}
 }
@@ -534,12 +532,9 @@ func runComparison(fileNew, fileOld string) {
 	intermediatesIdentical := true
 	var reasonsNotOnlyLeaf []string
 
-	maxLen := len(orderedNew)
-	if len(orderedOld) > maxLen {
-		maxLen = len(orderedOld)
-	}
+	maxLen := max(len(orderedNew), len(orderedOld))
 
-	for idx := 0; idx < maxLen; idx++ {
+	for idx := range maxLen {
 		var roleNew, roleOld string
 		var certNew, certOld *CertDetails
 
