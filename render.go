@@ -7,13 +7,18 @@ import (
 	"time"
 )
 
-const (
+var (
 	Green  = "\033[92m"
 	Red    = "\033[91m"
 	Yellow = "\033[93m"
 	Cyan   = "\033[96m"
 	Bold   = "\033[1m"
 	Reset  = "\033[0m"
+)
+
+var (
+	noColor bool
+	quiet   bool
 )
 
 var (
@@ -64,6 +69,9 @@ func printChainTree(ordered []*CertDetails) {
 
 // PrintValidationResult renders a ValidationResult to stdout.
 func PrintValidationResult(r *ValidationResult) {
+	if quiet {
+		return
+	}
 	fmt.Printf("%s%sCertificate Chain Validation Utility%s\n", Bold, Cyan, Reset)
 	fmt.Printf("File: %s\n", r.Path)
 	fmt.Println(sepEq)
@@ -79,7 +87,13 @@ func PrintValidationResult(r *ValidationResult) {
 
 	for idx, s := range r.Statuses {
 		cert := s.Cert
-		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, s.Color, Bold, s.Role, Reset)
+		color := Yellow
+		if idx == 0 {
+			color = Green
+		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned {
+			color = Cyan
+		}
+		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
 		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
 		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
 		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
@@ -171,6 +185,9 @@ func PrintValidationResult(r *ValidationResult) {
 
 // PrintComparisonResult renders a ComparisonResult to stdout.
 func PrintComparisonResult(r *ComparisonResult) {
+	if quiet {
+		return
+	}
 	fmt.Printf("%s%sCertificate Chain Comparison Utility%s\n", Bold, Cyan, Reset)
 	fmt.Printf("File 1 (New): %s\n", r.FileNew)
 	fmt.Printf("File 2 (Old): %s\n", r.FileOld)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,6 +139,76 @@ func TestValidate_EmptyFile(t *testing.T) {
 	}
 }
 
+func TestQuietSuppressesOutput(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
+	path := writePEM(t, []*x509.Certificate{leaf, root})
+
+	r, err := Validate(path)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// Capture stdout
+	old := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+
+	quiet = true
+	PrintValidationResult(r)
+	quiet = false
+
+	if err := pw.Close(); err != nil {
+		t.Errorf("close write pipe: %v", err)
+	}
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(pr); err != nil {
+		t.Fatalf("read from pipe: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("quiet=true: expected no output, got %d bytes", buf.Len())
+	}
+}
+
+func TestNoColorStripsANSI(t *testing.T) {
+	// Simulate what main does when --no-color is set
+	savedGreen, savedRed, savedYellow, savedCyan, savedBold, savedReset :=
+		Green, Red, Yellow, Cyan, Bold, Reset
+	Green, Red, Yellow, Cyan, Bold, Reset = "", "", "", "", "", ""
+	defer func() {
+		Green, Red, Yellow, Cyan, Bold, Reset =
+			savedGreen, savedRed, savedYellow, savedCyan, savedBold, savedReset
+	}()
+
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
+	path := writePEM(t, []*x509.Certificate{leaf, root})
+	r, err := Validate(path)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	old := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+	PrintValidationResult(r)
+	if err := pw.Close(); err != nil {
+		t.Errorf("close write pipe: %v", err)
+	}
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(pr); err != nil {
+		t.Fatalf("read from pipe: %v", err)
+	}
+	output := buf.String()
+	if strings.Contains(output, "\033[") {
+		t.Errorf("no-color: output still contains ANSI escape codes")
+	}
+}
+
 func TestCompare(t *testing.T) {
 	root, rootKey := makeCert(t, "Test Root CA", true, nil, nil)
 	leaf1, _ := makeCert(t, "Test Leaf", false, root, rootKey)
@@ -165,7 +237,7 @@ func TestCompare(t *testing.T) {
 			wantVerdict: "IDENTICAL",
 		},
 		{
-			name:        "different root",
+			name:        "different leaf CN",
 			newCerts:    []*x509.Certificate{leaf1, root},
 			oldCerts:    []*x509.Certificate{leaf3, root},
 			wantPassed:  false,

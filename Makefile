@@ -1,10 +1,11 @@
 BINARY  := xcv
 INSTALL := /usr/local/bin/$(BINARY)
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-.PHONY: build install uninstall vet test clean
+.PHONY: build install uninstall vet lint test clean
 
 build:
-	go build -o $(BINARY) .
+	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) .
 
 install: build
 	mv $(BINARY) $(INSTALL)

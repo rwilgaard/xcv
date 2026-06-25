@@ -66,20 +66,12 @@ func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 	statuses := make([]CertStatus, len(ordered))
 
 	for idx, cert := range ordered {
-		color := Yellow
-		if idx == 0 {
-			color = Green
-		} else if idx == len(ordered)-1 && cert.IsSelfSigned {
-			color = Cyan
-		}
-
 		notBefore := cert.Cert.NotBefore.UTC()
 		notAfter := cert.Cert.NotAfter.UTC()
 
 		s := CertStatus{
-			Cert:  cert,
-			Role:  getCertRoleName(idx, len(ordered), cert.IsSelfSigned),
-			Color: color,
+			Cert: cert,
+			Role: getCertRoleName(idx, len(ordered), cert.IsSelfSigned),
 		}
 
 		switch {

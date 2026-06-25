@@ -23,7 +23,6 @@ type CertDetails struct {
 type CertStatus struct {
 	Cert         *CertDetails
 	Role         string
-	Color        string
 	Active       bool
 	NotYetActive bool
 	Expired      bool

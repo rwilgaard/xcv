@@ -15,32 +15,60 @@ Unlike standard scripts that run external OpenSSL subprocesses, `xcv` performs a
 
 ## Installation
 
-Compile the single Go source file into a standalone executable:
+Compile into a standalone executable using `make`:
 
 ```bash
-# From the project directory
-go build -o xcv xcv
+make build
 ```
 
 Move the compiled binary to your bin path for global access:
 ```bash
-mv xcv /usr/local/bin/
+make install
+```
+
+To uninstall:
+```bash
+make uninstall
 ```
 
 ## Usage
 
+### Global flags
+
+```
+xcv [--no-color] [--quiet] [--version] [--help] <subcommand> ...
+```
+
+| Flag | Description |
+|------|-------------|
+| `--no-color` | Strip ANSI color codes (useful for log files and CI) |
+| `--quiet` | Suppress all output; rely on exit codes only |
+| `--version` | Print version and exit |
+| `--help` | Show help |
+
+**Note:** Global flags must appear before the subcommand: `xcv --quiet validate cert.pem`, not `xcv validate --quiet cert.pem`.
+
 ### 1. Single-File Chain Validation
+
 Verify that a PEM certificate chain is complete, cryptographically valid, and in the correct physical order:
 
 ```bash
-xcv cert_chain.pem
+xcv validate cert_chain.pem
 ```
 
 ### 2. Dual-File Renewal Verification
-Verify that a new certificate bundle is a clean renewal of the old one (verifying that only the leaf certificate changed/renewed, while intermediate/root certificates are 100% identical):
+
+Verify that a new certificate bundle is a clean renewal of the old one:
 
 ```bash
-xcv new_chain.pem old_chain.pem
+xcv compare new_chain.pem old_chain.pem
+```
+
+### Subcommand help
+
+```bash
+xcv validate --help
+xcv compare --help
 ```
 
 ## Exit Codes
