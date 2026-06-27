@@ -148,7 +148,9 @@ func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS connection to %s failed: %w", addr, err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	raw := conn.ConnectionState().PeerCertificates
 	pems := make([]string, len(raw))
@@ -298,7 +300,7 @@ func verifySignaturesDetails(ordered []*CertDetails) error {
 }
 
 func getCertRoleName(index, total int, isSelfSigned, isCA bool) string {
-	switch {
+	switch { //nolint:staticcheck // cases compare index against computed total-1; tagged switch not applicable
 	case index == total-1:
 		switch {
 		case isSelfSigned && isCA:
