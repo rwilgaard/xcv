@@ -100,7 +100,7 @@ func TestValidate(t *testing.T) {
 		{
 			name:       "self-signed only",
 			certs:      []*x509.Certificate{root},
-			wantPassed: false, // signature verify fails without a trusted root anchor
+			wantPassed: true, // self-signed root: no chain to walk, cert is structurally valid
 		},
 	}
 

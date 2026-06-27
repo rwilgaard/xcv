@@ -47,9 +47,12 @@ func printChainTree(ordered []*CertDetails) {
 		var label string
 		switch i {
 		case 0:
-			if cert.IsSelfSigned {
+			switch {
+			case cert.IsSelfSigned && cert.Cert.IsCA:
 				label = fmt.Sprintf("%s[Root]%s        ", Cyan, Reset)
-			} else {
+			case cert.IsSelfSigned:
+				label = fmt.Sprintf("%s[Leaf*]%s       ", Green, Reset)
+			default:
 				label = fmt.Sprintf("%s[Anchor]%s      ", Yellow, Reset)
 			}
 		case n - 1:
@@ -65,6 +68,78 @@ func printChainTree(ordered []*CertDetails) {
 		fmt.Printf("  %s%s%sCN=%s%s%s\n", label, indent, connector, Bold, cert.SubjectCN, Reset)
 	}
 	fmt.Println()
+}
+
+// PrintInspectResult renders an InspectResult to stdout.
+func PrintInspectResult(r *InspectResult) {
+	if quiet {
+		return
+	}
+	fmt.Printf("%s%sCertificate Inspector%s\n", Bold, Cyan, Reset)
+	fmt.Printf("File: %s\n", r.Path)
+	fmt.Println(sepEq)
+	fmt.Println()
+	fmt.Printf("Found %d certificate(s) in the file.\n", len(r.Certs))
+	fmt.Println(sepDash)
+	fmt.Println()
+
+	for _, cert := range r.Certs {
+		color := Green
+		switch {
+		case cert.IsSelfSigned && cert.Cert.IsCA:
+			color = Cyan
+		case cert.Cert.IsCA:
+			color = Yellow
+		}
+
+		role := "Leaf"
+		switch {
+		case cert.IsSelfSigned && cert.Cert.IsCA:
+			role = "Root CA (Self-Signed)"
+		case cert.Cert.IsCA:
+			role = "CA"
+		case cert.IsSelfSigned:
+			role = "Leaf (Self-Signed, No CA)"
+		}
+
+		fmt.Printf("[%d] %s%s%s\n", cert.Index, color, Bold, Reset)
+		fmt.Printf("    Role:         %s%s%s%s\n", color, Bold, role, Reset)
+		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
+		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
+		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
+		fmt.Printf("    Issuer DN:    %s\n", cert.IssuerDN)
+		fmt.Printf("    Serial:       %s\n", cert.Serial)
+		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
+
+		switch {
+		case time.Now().UTC().Before(cert.Cert.NotBefore.UTC()):
+			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s\n", Red, Bold, Reset)
+		case time.Now().UTC().After(cert.Cert.NotAfter.UTC()):
+			fmt.Printf("    Status:       %s%sEXPIRED%s\n", Red, Bold, Reset)
+		default:
+			daysLeft := int(cert.Cert.NotAfter.UTC().Sub(time.Now().UTC()).Hours() / 24)
+			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, daysLeft)
+		}
+
+		if cert.Skid != "" {
+			fmt.Printf("    SKID:         %s\n", cert.Skid)
+		}
+		if cert.Akid != "" {
+			fmt.Printf("    AKID:         %s\n", cert.Akid)
+		}
+		if len(cert.KeyUsages) > 0 {
+			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
+		}
+		if len(cert.ExtKeyUsages) > 0 {
+			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
+		}
+		for _, issue := range cert.ComplianceIssues {
+			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println(sepEq)
 }
 
 // PrintValidationResult renders a ValidationResult to stdout.
@@ -90,7 +165,7 @@ func PrintValidationResult(r *ValidationResult) {
 		color := Yellow
 		if idx == 0 {
 			color = Green
-		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned {
+		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned && cert.Cert.IsCA {
 			color = Cyan
 		}
 		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
@@ -117,6 +192,15 @@ func PrintValidationResult(r *ValidationResult) {
 		}
 		if cert.Akid != "" {
 			fmt.Printf("    AKID:         %s\n", cert.Akid)
+		}
+		if len(cert.KeyUsages) > 0 {
+			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
+		}
+		if len(cert.ExtKeyUsages) > 0 {
+			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
+		}
+		for _, issue := range cert.ComplianceIssues {
+			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
 		}
 		if s.AkidMismatch {
 			parent := r.Ordered[idx+1]
@@ -146,7 +230,7 @@ func PrintValidationResult(r *ValidationResult) {
 	fmt.Printf("%s[PEM File Order Verification]%s\n", Bold, Reset)
 	fmt.Println("  Expected order (Leaf to Root):")
 	for idx, cert := range r.Ordered {
-		roleName := getCertRoleName(idx, len(r.Ordered), cert.IsSelfSigned)
+		roleName := getCertRoleName(idx, len(r.Ordered), cert.IsSelfSigned, cert.Cert.IsCA)
 		fmt.Printf("    %d. CN=%s%s%s (%s)\n", idx+1, Bold, cert.SubjectCN, Reset, roleName)
 	}
 

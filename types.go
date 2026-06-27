@@ -15,7 +15,10 @@ type CertDetails struct {
 	NotAfterStr  string
 	Skid         string
 	Akid         string
-	IsSelfSigned bool
+	KeyUsages        []string
+	ExtKeyUsages     []string
+	ComplianceIssues []string
+	IsSelfSigned     bool
 	RawPEM       string
 }
 
@@ -80,6 +83,12 @@ type PositionResult struct {
 	RoleOld string
 	Status  PositionStatus
 	Reason  string // non-empty for Renewed/Different/Added/Removed
+}
+
+// InspectResult holds parsed cert details for one or more certs with no chain validation.
+type InspectResult struct {
+	Path  string
+	Certs []*CertDetails
 }
 
 // ComparisonResult holds the complete outcome of a two-file chain comparison.

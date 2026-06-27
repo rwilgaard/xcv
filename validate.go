@@ -31,7 +31,8 @@ func Validate(path string) (*ValidationResult, error) {
 
 	sigErr := verifySignaturesDetails(ordered)
 	orderCheck := computeOrderCheck(parsedCerts, ordered)
-	isCompleteChain := len(ordered) > 0 && ordered[len(ordered)-1].IsSelfSigned
+	last := ordered[len(ordered)-1]
+	isCompleteChain := len(ordered) > 0 && last.IsSelfSigned && last.Cert.IsCA
 
 	passed := allDatesValid && sigErr == nil && isCompleteChain && orderCheck.Correct
 	var failReasons []string
@@ -61,6 +62,22 @@ func Validate(path string) (*ValidationResult, error) {
 	}, nil
 }
 
+// Inspect parses the PEM file at path and returns raw cert details with no
+// chain validation — no ordering, no signature checks, no completeness check.
+func Inspect(path string) (*InspectResult, error) {
+	certs, pems, err := parseCertsFromFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no certificate blocks found in file; ensure certificates are in PEM format")
+	}
+	return &InspectResult{
+		Path:  path,
+		Certs: buildCertDetails(certs, pems),
+	}, nil
+}
+
 func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 	now := time.Now().UTC()
 	statuses := make([]CertStatus, len(ordered))
@@ -71,7 +88,7 @@ func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 
 		s := CertStatus{
 			Cert: cert,
-			Role: getCertRoleName(idx, len(ordered), cert.IsSelfSigned),
+			Role: getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA),
 		}
 
 		switch {
@@ -111,7 +128,7 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 		entry := PhysicalEntry{Cert: cert, LogicalIndex: -1}
 		if ok {
 			entry.LogicalIndex = logicalIdx
-			entry.Role = getCertRoleName(logicalIdx, len(ordered), cert.IsSelfSigned)
+			entry.Role = getCertRoleName(logicalIdx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
 		} else {
 			result.Correct = false
 			result.Reasons = append(result.Reasons, fmt.Sprintf(
@@ -135,7 +152,7 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 			physical := parsedCerts[idx]
 			if cert.Serial != physical.Serial || cert.SubjectDN != physical.SubjectDN {
 				result.Correct = false
-				expectedRole := getCertRoleName(idx, len(ordered), cert.IsSelfSigned)
+				expectedRole := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
 				result.Reasons = append(result.Reasons, fmt.Sprintf(
 					"Positional mismatch at index %d. Expected CN=%s (%s), but found CN=%s.",
 					idx+1, cert.SubjectCN, expectedRole, physical.SubjectCN))
@@ -221,11 +238,11 @@ func computePositions(orderedNew, orderedOld []*CertDetails) ([]PositionResult, 
 
 		if idx < len(orderedNew) {
 			certNew = orderedNew[idx]
-			roleNew = getCertRoleName(idx, len(orderedNew), certNew.IsSelfSigned)
+			roleNew = getCertRoleName(idx, len(orderedNew), certNew.IsSelfSigned, certNew.Cert.IsCA)
 		}
 		if idx < len(orderedOld) {
 			certOld = orderedOld[idx]
-			roleOld = getCertRoleName(idx, len(orderedOld), certOld.IsSelfSigned)
+			roleOld = getCertRoleName(idx, len(orderedOld), certOld.IsSelfSigned, certOld.Cert.IsCA)
 		}
 
 		p := PositionResult{Idx: idx, New: certNew, Old: certOld, RoleNew: roleNew, RoleOld: roleOld}
