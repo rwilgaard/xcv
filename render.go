@@ -70,6 +70,137 @@ func printChainTree(ordered []*CertDetails) {
 	fmt.Println()
 }
 
+// PrintCheckResult renders a CheckResult to stdout.
+func PrintCheckResult(r *CheckResult) {
+	if quiet {
+		return
+	}
+	fmt.Printf("%s%sTLS Certificate Check%s\n", Bold, Cyan, Reset)
+	fmt.Printf("Host: %s:%d\n", r.Host, r.Port)
+	fmt.Println(sepEq)
+	fmt.Println()
+
+	fmt.Printf("Server presented %d certificate(s).\n", len(r.Certs))
+	if !r.RootPresent {
+		fmt.Printf("%sNote: Root CA not included in server response (normal for TLS).%s\n", Yellow, Reset)
+	}
+	fmt.Println(sepDash)
+	fmt.Println()
+
+	printChainTree(r.Ordered)
+	fmt.Println(sepDash)
+	fmt.Println()
+
+	for idx, s := range r.Statuses {
+		cert := s.Cert
+		color := Yellow
+		if idx == 0 {
+			color = Green
+		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned && cert.Cert.IsCA {
+			color = Cyan
+		}
+		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
+		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
+		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
+		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
+		fmt.Printf("    Issuer DN:    %s\n", cert.IssuerDN)
+		fmt.Printf("    Serial:       %s\n", cert.Serial)
+		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
+
+		switch {
+		case s.NotYetActive:
+			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s (Activates in %s)\n",
+				Red, Bold, Reset, cert.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second))
+		case s.Expired:
+			fmt.Printf("    Status:       %s%sEXPIRED%s (Expired %s ago)\n",
+				Red, Bold, Reset, time.Now().UTC().Sub(cert.Cert.NotAfter.UTC()).Round(time.Second))
+		default:
+			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, s.DaysLeft)
+		}
+
+		if cert.Skid != "" {
+			fmt.Printf("    SKID:         %s\n", cert.Skid)
+		}
+		if cert.Akid != "" {
+			fmt.Printf("    AKID:         %s\n", cert.Akid)
+		}
+		if len(cert.KeyUsages) > 0 {
+			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
+		}
+		if len(cert.ExtKeyUsages) > 0 {
+			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
+		}
+		for _, issue := range cert.ComplianceIssues {
+			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
+		}
+		if s.AkidMismatch {
+			parent := r.Ordered[idx+1]
+			fmt.Printf("    %s%sWarning: AKID does not match parent SKID!%s\n", Red, Bold, Reset)
+			fmt.Printf("             This cert AKID: %s\n", cert.Akid)
+			fmt.Printf("             Parent cert SKID: %s\n", parent.Skid)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println(sepDash)
+	fmt.Println()
+
+	fmt.Printf("%s[Cryptographic Signature Chain Verification]%s\n", Bold, Reset)
+	if r.SignatureErr == nil {
+		fmt.Printf("  Result: %s%sPASS%s\n", Green, Bold, Reset)
+		fmt.Println("  Detail: Chain signature verification succeeded.")
+	} else {
+		fmt.Printf("  Result: %s%sFAIL%s\n", Red, Bold, Reset)
+		fmt.Printf("  Detail: Signature verification failed:\n          %v\n", r.SignatureErr)
+	}
+
+	fmt.Println()
+	fmt.Println(sepDash)
+	fmt.Println()
+
+	fmt.Printf("%s[Server-Presented Certificate Order]%s\n", Bold, Reset)
+	fmt.Println("  Expected order (Leaf to Root/Anchor):")
+	for idx, cert := range r.Ordered {
+		roleName := getCertRoleName(idx, len(r.Ordered), cert.IsSelfSigned, cert.Cert.IsCA)
+		fmt.Printf("    %d. CN=%s%s%s (%s)\n", idx+1, Bold, cert.SubjectCN, Reset, roleName)
+	}
+
+	fmt.Println("\n  Physical order as sent by server:")
+	for idx, e := range r.Order.Physical {
+		var roleDisp string
+		if e.LogicalIndex != -1 {
+			roleDisp = fmt.Sprintf("(%s)", e.Role)
+		} else {
+			roleDisp = fmt.Sprintf("(%sUnrelated certificate%s)", Red, Reset)
+		}
+		fmt.Printf("    %d. CN=%s%s%s %s\n", idx+1, Bold, e.Cert.SubjectCN, Reset, roleDisp)
+	}
+
+	if r.Order.Correct {
+		fmt.Printf("\n  Result: %s%sPASS%s\n", Green, Bold, Reset)
+		fmt.Println("  Detail: Server sent certificates in correct order (Leaf → Intermediates).")
+	} else {
+		fmt.Printf("\n  Result: %s%sFAIL%s\n", Red, Bold, Reset)
+		fmt.Println("  Detail: Server sent certificates in incorrect order.")
+		for _, reason := range r.Order.Reasons {
+			fmt.Printf("          - %s\n", reason)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(sepEq)
+
+	if !r.RootPresent {
+		fmt.Printf("%sNote: Root CA absent from server chain (expected — validated against presented intermediates only).%s\n", Yellow, Reset)
+	}
+	if r.Passed {
+		fmt.Printf("%s%sSUCCESS: Certificates are valid, properly ordered, and cryptographically sound.%s\n", Green, Bold, Reset)
+	} else {
+		fmt.Printf("%s%sFAILURE: TLS certificate check failed.%s\n", Red, Bold, Reset)
+		fmt.Printf("Reasons: %s\n", strings.Join(r.FailReasons, ", "))
+	}
+}
+
 // PrintInspectResult renders an InspectResult to stdout.
 func PrintInspectResult(r *InspectResult) {
 	if quiet {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
@@ -136,6 +137,29 @@ func newCertDetails(cert *x509.Certificate, rawPEM string, index int) *CertDetai
 		IsSelfSigned: isSelfSigned(cert),
 		RawPEM:       rawPEM,
 	}
+}
+
+func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := tls.Dial("tcp", addr, &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // intentional: we analyse the cert, not trust it
+		ServerName:         host,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("TLS connection to %s failed: %w", addr, err)
+	}
+	defer conn.Close()
+
+	raw := conn.ConnectionState().PeerCertificates
+	pems := make([]string, len(raw))
+	for i, c := range raw {
+		var buf bytes.Buffer
+		if err := pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}); err != nil {
+			return nil, nil, fmt.Errorf("failed to encode certificate %d: %w", i, err)
+		}
+		pems[i] = buf.String()
+	}
+	return raw, pems, nil
 }
 
 func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {

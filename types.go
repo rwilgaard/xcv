@@ -85,6 +85,20 @@ type PositionResult struct {
 	Reason  string // non-empty for Renewed/Different/Added/Removed
 }
 
+// CheckResult holds the outcome of a live TLS certificate check against a host.
+type CheckResult struct {
+	Host        string
+	Port        int
+	Certs       []*CertDetails
+	Ordered     []*CertDetails
+	Statuses    []CertStatus
+	SignatureErr error
+	Order        OrderCheckResult
+	RootPresent  bool
+	Passed       bool
+	FailReasons  []string
+}
+
 // InspectResult holds parsed cert details for one or more certs with no chain validation.
 type InspectResult struct {
 	Path  string

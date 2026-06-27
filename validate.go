@@ -62,6 +62,58 @@ func Validate(path string) (*ValidationResult, error) {
 	}, nil
 }
 
+// Check connects to host:port over TLS, retrieves the presented certificate
+// chain, and validates expiry, signatures, and server-sent order. Root absence
+// is treated as informational — servers normally omit the root.
+func Check(host string, port int) (*CheckResult, error) {
+	rawCerts, pems, err := fetchCertsFromTLS(host, port)
+	if err != nil {
+		return nil, err
+	}
+
+	parsed := buildCertDetails(rawCerts, pems)
+	ordered := orderChainDetails(parsed)
+
+	statuses := computeCertStatuses(ordered)
+	allDatesValid := true
+	for _, s := range statuses {
+		if s.NotYetActive || s.Expired {
+			allDatesValid = false
+			break
+		}
+	}
+
+	sigErr := verifySignaturesDetails(ordered)
+	orderCheck := computeOrderCheck(parsed, ordered)
+
+	rootPresent := len(ordered) > 0 && ordered[len(ordered)-1].IsSelfSigned && ordered[len(ordered)-1].Cert.IsCA
+
+	passed := allDatesValid && sigErr == nil && orderCheck.Correct
+	var failReasons []string
+	if !allDatesValid {
+		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
+	}
+	if sigErr != nil {
+		failReasons = append(failReasons, "cryptographic signature verification failed")
+	}
+	if !orderCheck.Correct {
+		failReasons = append(failReasons, "certificates were presented in incorrect order by the server")
+	}
+
+	return &CheckResult{
+		Host:        host,
+		Port:        port,
+		Certs:       parsed,
+		Ordered:     ordered,
+		Statuses:    statuses,
+		SignatureErr: sigErr,
+		Order:       orderCheck,
+		RootPresent: rootPresent,
+		Passed:      passed,
+		FailReasons: failReasons,
+	}, nil
+}
+
 // Inspect parses the PEM file at path and returns raw cert details with no
 // chain validation — no ordering, no signature checks, no completeness check.
 func Inspect(path string) (*InspectResult, error) {

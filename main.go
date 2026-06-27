@@ -3,7 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
+	"strings"
 )
 
 var version = "dev"
@@ -23,6 +26,7 @@ Usage:
   xcv --help
 
 Subcommands:
+  check <host[:port]>     Fetch and validate TLS certificates from a live host
   inspect <file>          Display certificate details without chain validation
   validate <file>         Validate a PEM certificate chain file
   compare <new> <old>     Compare two PEM certificate chain files
@@ -67,6 +71,8 @@ Exit codes:
 	}
 
 	switch args[0] {
+	case "check":
+		runCheck(args[1:])
 	case "inspect":
 		runInspect(args[1:])
 	case "validate":
@@ -76,6 +82,77 @@ Exit codes:
 	default:
 		printErr(fmt.Sprintf("unknown subcommand %q", args[0]))
 		root.Usage()
+		os.Exit(1)
+	}
+}
+
+// parseHostPort extracts host and port from user input.
+// Accepts: example.com, example.com:8443, https://example.com, https://example.com:8443
+func parseHostPort(input string, defaultPort int) (host string, port int, err error) {
+	input = strings.TrimPrefix(input, "https://")
+	input = strings.TrimPrefix(input, "http://")
+	if i := strings.Index(input, "/"); i != -1 {
+		input = input[:i]
+	}
+	h, p, splitErr := net.SplitHostPort(input)
+	if splitErr != nil {
+		return input, defaultPort, nil
+	}
+	portNum, convErr := strconv.Atoi(p)
+	if convErr != nil {
+		return "", 0, fmt.Errorf("invalid port %q", p)
+	}
+	return h, portNum, nil
+}
+
+func runCheck(args []string) {
+	fs := flag.NewFlagSet("xcv check", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	portFlag := fs.Int("port", 443, "TCP port to connect to (overridden by port in host argument)")
+	fs.Usage = func() {
+		fmt.Print(`Usage:
+  xcv check <host[:port]>
+
+Fetch and validate TLS certificates from a live host. Checks certificate
+expiry, cryptographic signatures, and chain order. Root CA absence is
+treated as informational — servers normally omit the root.
+
+Accepts: example.com, example.com:8443, https://example.com
+
+Flags:
+  --port    TCP port (default: 443, overridden if port given in host arg)
+
+Exit codes:
+  0   All certificates valid and correctly ordered
+  1   Validation failed or connection error
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	host, port, err := parseHostPort(fs.Arg(0), *portFlag)
+	if err != nil {
+		printErr(err.Error())
+		os.Exit(1)
+	}
+
+	r, err := Check(host, port)
+	if err != nil {
+		printErr(err.Error())
+		os.Exit(1)
+	}
+	PrintCheckResult(r)
+	if !r.Passed {
 		os.Exit(1)
 	}
 }
