@@ -1,20 +1,15 @@
 # xcv (X.509 Certificate Verifier)
 
-`xcv` is a command-line utility written in pure Go for inspecting, validating, and comparing X.509 certificate chains.
+`xcv` is a command-line tool for inspecting, validating, and comparing X.509 certificate chains. Written in Go.
 
-It performs all certificate parsing, cryptographic signature validation, expiration checking, RFC 5280 compliance analysis, and ordering verification entirely in-memory using Go's standard library (`crypto/x509`). Portable across macOS, Linux, and Windows.
+Works on macOS, Linux, and Windows.
 
-## Features
+## What it does
 
-- **Live TLS Inspection:** Connect to any host and retrieve the presented certificate chain directly over TLS.
-- **Logical Chain Reconstruction:** Identifies the leaf certificate and traces parentage up to the root, regardless of physical PEM order.
-- **Physical Order Enforcement:** Validates that certificates in a PEM bundle appear in the correct order (`Leaf → Intermediates → Root`), required by most web servers, proxies, and load balancers.
-- **Cryptographic Signature Verification:** Confirms that every certificate in the chain was signed by the one above it.
-- **Expiration & Status Check:** Reports active days remaining, or warns if a certificate is expired or not yet active.
-- **RFC 5280 Compliance:** Detects common violations — non-positive serial numbers, oversized serials, missing BasicConstraints on CA certificates, non-critical KeyUsage extensions, and more.
-- **Key Usage Display:** Shows Key Usage and Extended Key Usage attributes per certificate.
-- **Side-by-Side Comparison:** Compare two PEM bundles to confirm only the leaf certificate changed — intermediates and root untouched.
-- **Self-Signed Detection:** Distinguishes genuine root CAs (`CA:TRUE` + self-signed) from self-signed leaf certificates with no CA constraints.
+- Pull and verify a live TLS certificate chain from any host
+- Validate signatures, expiration, and PEM order (`Leaf → Intermediates → Root`)
+- Detect RFC 5280 violations and show key usage per certificate
+- Compare two bundles to confirm only the leaf changed during renewal
 
 ## Installation
 
@@ -42,7 +37,7 @@ make uninstall
 xcv [--no-color] [--quiet] [--version] <subcommand> [flags] <args>
 ```
 
-Global flags can appear before or after the subcommand.
+Global flags work before or after the subcommand.
 
 ### Global flags
 
@@ -66,7 +61,7 @@ xcv check https://example.com
 xcv check example.com --port 8443
 ```
 
-Validates expiry, cryptographic signatures, and server-presented order. Root CA absence is treated as informational — servers normally omit the root.
+Checks expiry, signatures, and the order the server presented. Missing root CA is informational — servers normally don't send it.
 
 ---
 
@@ -78,23 +73,23 @@ Validate a PEM certificate chain file:
 xcv validate cert_chain.pem
 ```
 
-Checks chain completeness, cryptographic signatures, expiration, physical PEM order, and RFC 5280 compliance.
+Checks the chain is complete, signatures are valid, nothing is expired, certs are in the right order, and RFC 5280 is satisfied.
 
 ---
 
 ### 3. Certificate Inspection
 
-Display detailed information about certificates in a PEM file without chain validation:
+Display detailed information about a PEM file without running chain validation:
 
 ```bash
 xcv inspect cert.pem
 ```
 
-Shows subject, issuer, serial, validity, key usage, and any RFC compliance issues. No PASS/FAIL — information only. Useful for inspecting a single certificate or a bundle without needing a complete chain.
+Shows subject, issuer, serial, validity, key usage, and any RFC issues. No PASS/FAIL — just information. Useful when you have a single cert or an incomplete bundle and don't need full chain verification.
 
 ---
 
-### 4. Dual-File Renewal Verification
+### 4. Renewal Comparison
 
 Compare a new certificate bundle against an old one:
 
@@ -102,7 +97,7 @@ Compare a new certificate bundle against an old one:
 xcv compare new_chain.pem old_chain.pem
 ```
 
-Passes when only the leaf certificate changed (clean renewal). Fails if intermediates or root certificates were modified, dropped, or replaced.
+Passes if only the leaf changed. Fails if any intermediate or root was modified, dropped, or swapped out.
 
 ---
 
@@ -128,7 +123,7 @@ xcv completion bash   # or: zsh, fish, powershell
 | `0` | Passed — chain valid, renewal clean, or parse succeeded |
 | `1` | Failed — broken chain, expired cert, wrong order, or unexpected changes |
 
-Suitable for pre-commit hooks, CI/CD pipelines, and deployment verification scripts.
+Works well in pre-commit hooks, CI pipelines, or deployment scripts.
 
 ## License
 
