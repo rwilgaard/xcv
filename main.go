@@ -23,6 +23,7 @@ Usage:
   xcv --help
 
 Subcommands:
+  inspect <file>          Display certificate details without chain validation
   validate <file>         Validate a PEM certificate chain file
   compare <new> <old>     Compare two PEM certificate chain files
 
@@ -66,6 +67,8 @@ Exit codes:
 	}
 
 	switch args[0] {
+	case "inspect":
+		runInspect(args[1:])
 	case "validate":
 		runValidate(args[1:])
 	case "compare":
@@ -75,6 +78,43 @@ Exit codes:
 		root.Usage()
 		os.Exit(1)
 	}
+}
+
+func runInspect(args []string) {
+	fs := flag.NewFlagSet("xcv inspect", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() {
+		fmt.Print(`Usage:
+  xcv inspect <file>
+
+Display certificate details from a PEM file without chain validation.
+Shows subject, issuer, serial, validity, key usage, and RFC compliance
+issues for each certificate. No PASS/FAIL — information only.
+
+Exit codes:
+  0   File parsed successfully
+  1   File could not be parsed
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	r, err := Inspect(fs.Arg(0))
+	if err != nil {
+		printErr(err.Error())
+		os.Exit(1)
+	}
+	PrintInspectResult(r)
 }
 
 func runValidate(args []string) {
