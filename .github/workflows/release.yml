@@ -50,6 +50,6 @@ jobs:
             --body "Automated flake update triggered by release ${GITHUB_REF_NAME}." \
             --base main \
             --head chore/flake-update-${GITHUB_REF_NAME}
-          gh pr merge --auto --merge chore/flake-update-${GITHUB_REF_NAME}
+          gh pr merge --auto --squash chore/flake-update-${GITHUB_REF_NAME}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
