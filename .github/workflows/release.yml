@@ -24,32 +24,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: cachix/install-nix-action@v31
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: cachix/install-nix-action@v31
-
-      - name: Update flake
-        run: |
-          nix run nixpkgs#nix-update -- --flake --version ${GITHUB_REF_NAME#v} default
-
-      - name: Commit flake update
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b chore/flake-update-${GITHUB_REF_NAME}
-          git add flake.nix flake.lock
-          git commit -m "chore: update flake to ${GITHUB_REF_NAME}"
-          git push origin chore/flake-update-${GITHUB_REF_NAME}
-          gh pr create \
-            --title "chore: update flake to ${GITHUB_REF_NAME}" \
-            --body "Automated flake update triggered by release ${GITHUB_REF_NAME}." \
-            --base main \
-            --head chore/flake-update-${GITHUB_REF_NAME}
-          gh pr merge --auto --squash chore/flake-update-${GITHUB_REF_NAME}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NIX_PACKAGES_TOKEN: ${{ secrets.NIX_PACKAGES_TOKEN }}
