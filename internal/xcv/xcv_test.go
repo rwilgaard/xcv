@@ -17,8 +17,6 @@ import (
 	"time"
 )
 
-
-
 // testSerialSeq is a monotonically increasing counter used to guarantee unique
 // serial numbers across all in-process certificate generations.
 var testSerialSeq atomic.Int64
@@ -363,7 +361,7 @@ func TestPrintComparisonResult(t *testing.T) {
 		t.Fatalf("read from pipe: %v", err)
 	}
 	output := buf.String()
-	for _, want := range []string{"Certificate Chain Comparison", "leaf certificate has changed", "PASS"} {
+	for _, want := range []string{"Certificate Chain Comparison", "Summary", "differ"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -386,15 +384,15 @@ func TestPrintCheckResult(t *testing.T) {
 	parsed := buildCertDetails([]*x509.Certificate{leaf, root}, pems)
 	ordered := orderChainDetails(parsed)
 	r := &CheckResult{
-		Host:        "example.com",
-		Port:        443,
-		Certs:       parsed,
-		Ordered:     ordered,
-		Statuses:    computeCertStatuses(ordered),
+		Host:         "example.com",
+		Port:         443,
+		Certs:        parsed,
+		Ordered:      ordered,
+		Statuses:     computeCertStatuses(ordered),
 		SignatureErr: verifySignaturesDetails(ordered),
-		Order:       computeOrderCheck(parsed, ordered),
-		RootPresent: true,
-		Passed:      true,
+		Order:        computeOrderCheck(parsed, ordered),
+		RootPresent:  true,
+		Passed:       true,
 	}
 
 	old := os.Stdout
@@ -421,36 +419,36 @@ func TestPrintCheckResult(t *testing.T) {
 func TestCompare(t *testing.T) {
 	root, rootKey := makeCert(t, "Test Root CA", true, nil, nil)
 	leaf1, _ := makeCert(t, "Test Leaf", false, root, rootKey)
-	leaf2, _ := makeCert(t, "Test Leaf", false, root, rootKey)   // renewed: same CN, different serial
-	leaf3, _ := makeCert(t, "Test Leaf V2", false, root, rootKey) // different CN → StatusDifferent → FAIL
+	leaf2, _ := makeCert(t, "Test Leaf", false, root, rootKey)    // renewed: same CN, different serial
+	leaf3, _ := makeCert(t, "Test Leaf V2", false, root, rootKey) // different CN
 
 	tests := []struct {
-		name        string
-		newCerts    []*x509.Certificate
-		oldCerts    []*x509.Certificate
-		wantPassed  bool
-		wantVerdict string
+		name             string
+		newCerts         []*x509.Certificate
+		oldCerts         []*x509.Certificate
+		wantLeafStatus   PositionStatus
+		wantRootStatus   PositionStatus
 	}{
 		{
-			name:        "leaf renewed",
-			newCerts:    []*x509.Certificate{leaf2, root},
-			oldCerts:    []*x509.Certificate{leaf1, root},
-			wantPassed:  true,
-			wantVerdict: "LEAF_RENEWED",
+			name:           "leaf renewed",
+			newCerts:       []*x509.Certificate{leaf2, root},
+			oldCerts:       []*x509.Certificate{leaf1, root},
+			wantLeafStatus: StatusRenewed,
+			wantRootStatus: StatusIdentical,
 		},
 		{
-			name:        "identical chains",
-			newCerts:    []*x509.Certificate{leaf1, root},
-			oldCerts:    []*x509.Certificate{leaf1, root},
-			wantPassed:  true,
-			wantVerdict: "IDENTICAL",
+			name:           "identical chains",
+			newCerts:       []*x509.Certificate{leaf1, root},
+			oldCerts:       []*x509.Certificate{leaf1, root},
+			wantLeafStatus: StatusIdentical,
+			wantRootStatus: StatusIdentical,
 		},
 		{
-			name:        "different leaf CN",
-			newCerts:    []*x509.Certificate{leaf1, root},
-			oldCerts:    []*x509.Certificate{leaf3, root},
-			wantPassed:  false,
-			wantVerdict: "FAIL",
+			name:           "different leaf CN",
+			newCerts:       []*x509.Certificate{leaf1, root},
+			oldCerts:       []*x509.Certificate{leaf3, root},
+			wantLeafStatus: StatusDifferent,
+			wantRootStatus: StatusIdentical,
 		},
 	}
 
@@ -462,11 +460,14 @@ func TestCompare(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compare returned error: %v", err)
 			}
-			if r.Passed != tc.wantPassed {
-				t.Errorf("Passed = %v, want %v", r.Passed, tc.wantPassed)
+			if len(r.Positions) < 2 {
+				t.Fatalf("expected at least 2 positions, got %d", len(r.Positions))
 			}
-			if r.Verdict != tc.wantVerdict {
-				t.Errorf("Verdict = %q, want %q", r.Verdict, tc.wantVerdict)
+			if r.Positions[0].Status != tc.wantLeafStatus {
+				t.Errorf("leaf status = %v, want %v", r.Positions[0].Status, tc.wantLeafStatus)
+			}
+			if r.Positions[1].Status != tc.wantRootStatus {
+				t.Errorf("root status = %v, want %v", r.Positions[1].Status, tc.wantRootStatus)
 			}
 		})
 	}
@@ -589,9 +590,9 @@ func TestComplianceIssues(t *testing.T) {
 	longSerial := new(big.Int).SetBytes(bytes.Repeat([]byte{0xff}, 21))
 
 	tests := []struct {
-		name        string
-		cert        *x509.Certificate
-		wantIssues  []string
+		name       string
+		cert       *x509.Certificate
+		wantIssues []string
 	}{
 		{
 			name:       "negative serial",
@@ -646,4 +647,3 @@ func TestComplianceIssues(t *testing.T) {
 		})
 	}
 }
-
