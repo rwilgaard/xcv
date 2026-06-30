@@ -25,6 +25,70 @@ var (
 	sepDash = strings.Repeat("-", 80)
 )
 
+func printCertStatuses(statuses []CertStatus, ordered []*CertDetails) {
+	for idx, s := range statuses {
+		cert := s.Cert
+		color := Yellow
+		if idx == 0 {
+			color = Green
+		} else if idx == len(statuses)-1 && cert.IsSelfSigned && cert.Cert.IsCA {
+			color = Cyan
+		}
+		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
+		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
+		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
+		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
+		fmt.Printf("    Issuer DN:    %s\n", cert.IssuerDN)
+		fmt.Printf("    Serial:       %s\n", cert.Serial)
+		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
+
+		switch {
+		case s.NotYetActive:
+			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s (Activates in %s)\n",
+				Red, Bold, Reset, cert.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second))
+		case s.Expired:
+			fmt.Printf("    Status:       %s%sEXPIRED%s (Expired %s ago)\n",
+				Red, Bold, Reset, time.Now().UTC().Sub(cert.Cert.NotAfter.UTC()).Round(time.Second))
+		default:
+			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, s.DaysLeft)
+		}
+
+		if cert.Skid != "" {
+			fmt.Printf("    SKID:         %s\n", cert.Skid)
+		}
+		if cert.Akid != "" {
+			fmt.Printf("    AKID:         %s\n", cert.Akid)
+		}
+		if len(cert.KeyUsages) > 0 {
+			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
+		}
+		if len(cert.ExtKeyUsages) > 0 {
+			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
+		}
+		for _, issue := range cert.ComplianceIssues {
+			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
+		}
+		if s.AkidMismatch {
+			parent := ordered[idx+1]
+			fmt.Printf("    %s%sWarning: AKID does not match parent SKID!%s\n", Red, Bold, Reset)
+			fmt.Printf("             This cert AKID: %s\n", cert.Akid)
+			fmt.Printf("             Parent cert SKID: %s\n", parent.Skid)
+		}
+		fmt.Println()
+	}
+}
+
+func printSignatureVerification(err error) {
+	fmt.Printf("%s[Cryptographic Signature Chain Verification]%s\n", Bold, Reset)
+	if err == nil {
+		fmt.Printf("  Result: %s%sPASS%s\n", Green, Bold, Reset)
+		fmt.Println("  Detail: Chain signature verification succeeded.")
+	} else {
+		fmt.Printf("  Result: %s%sFAIL%s\n", Red, Bold, Reset)
+		fmt.Printf("  Detail: Signature verification failed:\n          %v\n", err)
+	}
+}
+
 func printChainTree(ordered []*CertDetails) {
 	fmt.Printf("%s[Chain Structure]%s\n", Bold, Reset)
 	if len(ordered) == 0 {
@@ -85,68 +149,12 @@ func PrintCheckResult(r *CheckResult) {
 	fmt.Println(sepDash)
 	fmt.Println()
 
-	for idx, s := range r.Statuses {
-		cert := s.Cert
-		color := Yellow
-		if idx == 0 {
-			color = Green
-		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned && cert.Cert.IsCA {
-			color = Cyan
-		}
-		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
-		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
-		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
-		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
-		fmt.Printf("    Issuer DN:    %s\n", cert.IssuerDN)
-		fmt.Printf("    Serial:       %s\n", cert.Serial)
-		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
-
-		switch {
-		case s.NotYetActive:
-			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s (Activates in %s)\n",
-				Red, Bold, Reset, cert.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second))
-		case s.Expired:
-			fmt.Printf("    Status:       %s%sEXPIRED%s (Expired %s ago)\n",
-				Red, Bold, Reset, time.Now().UTC().Sub(cert.Cert.NotAfter.UTC()).Round(time.Second))
-		default:
-			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, s.DaysLeft)
-		}
-
-		if cert.Skid != "" {
-			fmt.Printf("    SKID:         %s\n", cert.Skid)
-		}
-		if cert.Akid != "" {
-			fmt.Printf("    AKID:         %s\n", cert.Akid)
-		}
-		if len(cert.KeyUsages) > 0 {
-			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
-		}
-		if len(cert.ExtKeyUsages) > 0 {
-			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
-		}
-		for _, issue := range cert.ComplianceIssues {
-			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
-		}
-		if s.AkidMismatch {
-			parent := r.Ordered[idx+1]
-			fmt.Printf("    %s%sWarning: AKID does not match parent SKID!%s\n", Red, Bold, Reset)
-			fmt.Printf("             This cert AKID: %s\n", cert.Akid)
-			fmt.Printf("             Parent cert SKID: %s\n", parent.Skid)
-		}
-		fmt.Println()
-	}
+	printCertStatuses(r.Statuses, r.Ordered)
 
 	fmt.Println(sepDash)
 	fmt.Println()
 
-	fmt.Printf("%s[Cryptographic Signature Chain Verification]%s\n", Bold, Reset)
-	if r.SignatureErr == nil {
-		fmt.Printf("  Result: %s%sPASS%s\n", Green, Bold, Reset)
-		fmt.Println("  Detail: Chain signature verification succeeded.")
-	} else {
-		fmt.Printf("  Result: %s%sFAIL%s\n", Red, Bold, Reset)
-		fmt.Printf("  Detail: Signature verification failed:\n          %v\n", r.SignatureErr)
-	}
+	printSignatureVerification(r.SignatureErr)
 
 	fmt.Println()
 	fmt.Println(sepDash)
@@ -208,6 +216,7 @@ func PrintInspectResult(r *InspectResult) {
 	fmt.Println(sepDash)
 	fmt.Println()
 
+	now := time.Now().UTC()
 	for _, cert := range r.Certs {
 		color := Green
 		switch {
@@ -237,12 +246,12 @@ func PrintInspectResult(r *InspectResult) {
 		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
 
 		switch {
-		case time.Now().UTC().Before(cert.Cert.NotBefore.UTC()):
+		case now.Before(cert.Cert.NotBefore.UTC()):
 			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s\n", Red, Bold, Reset)
-		case time.Now().UTC().After(cert.Cert.NotAfter.UTC()):
+		case now.After(cert.Cert.NotAfter.UTC()):
 			fmt.Printf("    Status:       %s%sEXPIRED%s\n", Red, Bold, Reset)
 		default:
-			daysLeft := int(cert.Cert.NotAfter.UTC().Sub(time.Now().UTC()).Hours() / 24)
+			daysLeft := int(cert.Cert.NotAfter.UTC().Sub(now).Hours() / 24)
 			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, daysLeft)
 		}
 
@@ -285,68 +294,12 @@ func PrintValidationResult(r *ValidationResult) {
 	fmt.Println(sepDash)
 	fmt.Println()
 
-	for idx, s := range r.Statuses {
-		cert := s.Cert
-		color := Yellow
-		if idx == 0 {
-			color = Green
-		} else if idx == len(r.Statuses)-1 && cert.IsSelfSigned && cert.Cert.IsCA {
-			color = Cyan
-		}
-		fmt.Printf("[%d] %s%sCertificate Role: %s%s\n", idx+1, color, Bold, s.Role, Reset)
-		fmt.Printf("    Subject CN:   %s%s%s\n", Bold, cert.SubjectCN, Reset)
-		fmt.Printf("    Subject DN:   %s\n", cert.SubjectDN)
-		fmt.Printf("    Issuer CN:    %s\n", cert.IssuerCN)
-		fmt.Printf("    Issuer DN:    %s\n", cert.IssuerDN)
-		fmt.Printf("    Serial:       %s\n", cert.Serial)
-		fmt.Printf("    Validity:     %s -> %s\n", cert.NotBeforeStr, cert.NotAfterStr)
-
-		switch {
-		case s.NotYetActive:
-			fmt.Printf("    Status:       %s%sNOT YET ACTIVE%s (Activates in %s)\n",
-				Red, Bold, Reset, cert.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second))
-		case s.Expired:
-			fmt.Printf("    Status:       %s%sEXPIRED%s (Expired %s ago)\n",
-				Red, Bold, Reset, time.Now().UTC().Sub(cert.Cert.NotAfter.UTC()).Round(time.Second))
-		default:
-			fmt.Printf("    Status:       %s%sACTIVE%s (%d days remaining)\n", Green, Bold, Reset, s.DaysLeft)
-		}
-
-		if cert.Skid != "" {
-			fmt.Printf("    SKID:         %s\n", cert.Skid)
-		}
-		if cert.Akid != "" {
-			fmt.Printf("    AKID:         %s\n", cert.Akid)
-		}
-		if len(cert.KeyUsages) > 0 {
-			fmt.Printf("    Key Usage:    %s\n", strings.Join(cert.KeyUsages, ", "))
-		}
-		if len(cert.ExtKeyUsages) > 0 {
-			fmt.Printf("    Ext Key Use:  %s\n", strings.Join(cert.ExtKeyUsages, ", "))
-		}
-		for _, issue := range cert.ComplianceIssues {
-			fmt.Printf("    %s%sRFC Violation:%s %s\n", Red, Bold, Reset, issue)
-		}
-		if s.AkidMismatch {
-			parent := r.Ordered[idx+1]
-			fmt.Printf("    %s%sWarning: AKID does not match parent SKID!%s\n", Red, Bold, Reset)
-			fmt.Printf("             This cert AKID: %s\n", cert.Akid)
-			fmt.Printf("             Parent cert SKID: %s\n", parent.Skid)
-		}
-		fmt.Println()
-	}
+	printCertStatuses(r.Statuses, r.Ordered)
 
 	fmt.Println(sepDash)
 	fmt.Println()
 
-	fmt.Printf("%s[Cryptographic Signature Chain Verification]%s\n", Bold, Reset)
-	if r.SignatureErr == nil {
-		fmt.Printf("  Result: %s%sPASS%s\n", Green, Bold, Reset)
-		fmt.Println("  Detail: Chain signature verification succeeded.")
-	} else {
-		fmt.Printf("  Result: %s%sFAIL%s\n", Red, Bold, Reset)
-		fmt.Printf("  Detail: Signature verification failed:\n          %v\n", r.SignatureErr)
-	}
+	printSignatureVerification(r.SignatureErr)
 
 	fmt.Println()
 	fmt.Println(sepDash)
@@ -451,32 +404,19 @@ func PrintComparisonResult(r *ComparisonResult) {
 	fmt.Println(sepDash)
 	fmt.Println()
 
-	fmt.Printf("%s[Comparison Verdict]%s\n", Bold, Reset)
+	var identical, changed int
+	for _, p := range r.Positions {
+		if p.Status == StatusIdentical {
+			identical++
+		} else {
+			changed++
+		}
+	}
 
-	switch r.Verdict {
-	case "LEAF_RENEWED":
-		fmt.Printf("  Result: %s%sPASS%s\n", Green, Bold, Reset)
-		fmt.Println("  Detail: ONLY the leaf certificate has changed/renewed! The entire supporting chain (intermediates and root) remains 100% identical.")
-		fmt.Printf("          - Leaf CN:           %s\n", r.OrderedNew[0].SubjectCN)
-		fmt.Printf("          - Old Leaf Serial:   %s (Expires: %s)\n", r.OrderedOld[0].Serial, r.OrderedOld[0].NotAfterStr)
-		fmt.Printf("          - New Leaf Serial:   %s (Expires: %s)\n", r.OrderedNew[0].Serial, r.OrderedNew[0].NotAfterStr)
-	case "IDENTICAL":
-		fmt.Printf("  Result: %s%sPASS (IDENTICAL CHAINS)%s\n", Green, Bold, Reset)
-		fmt.Println("  Detail: Both certificate files contain the EXACT same certificate chain (including the leaf).")
-	default:
-		fmt.Printf("  Result: %s%sFAIL / WARNING%s\n", Red, Bold, Reset)
-		fmt.Println("  Detail: The difference between the two files is NOT limited to a simple leaf certificate renewal.")
-		fmt.Println("  Discrepancies found:")
-		if r.LeafSerialMatch && !r.IntermediatesIdentical {
-			fmt.Println("          - The leaf certificate is identical, but intermediates/root certificates have changed.")
-		}
-		if !r.LeafCNMatch && len(r.OrderedNew) > 0 && len(r.OrderedOld) > 0 {
-			fmt.Printf("          - Leaf subject Common Name (CN) changed: '%s' (New) vs '%s' (Old).\n", r.OrderedNew[0].SubjectCN, r.OrderedOld[0].SubjectCN)
-		}
-		for _, p := range r.Positions {
-			if p.Reason != "" {
-				fmt.Printf("          - %s\n", p.Reason)
-			}
-		}
+	fmt.Printf("%s[Summary]%s\n", Bold, Reset)
+	if changed == 0 {
+		fmt.Printf("  %s%sChains are identical%s — all %d positions match.\n", Green, Bold, Reset, identical)
+	} else {
+		fmt.Printf("  %d position(s) unchanged, %s%s%d position(s) differ%s.\n", identical, Yellow, Bold, changed, Reset)
 	}
 }

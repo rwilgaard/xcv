@@ -4,22 +4,22 @@ import "crypto/x509"
 
 // CertDetails holds parsed fields from a single x509.Certificate.
 type CertDetails struct {
-	Index        int
-	Cert         *x509.Certificate
-	SubjectCN    string
-	IssuerCN     string
-	SubjectDN    string
-	IssuerDN     string
-	Serial       string
-	NotBeforeStr string
-	NotAfterStr  string
-	Skid         string
-	Akid         string
+	Index            int
+	Cert             *x509.Certificate
+	SubjectCN        string
+	IssuerCN         string
+	SubjectDN        string
+	IssuerDN         string
+	Serial           string
+	NotBeforeStr     string
+	NotAfterStr      string
+	Skid             string
+	Akid             string
 	KeyUsages        []string
 	ExtKeyUsages     []string
 	ComplianceIssues []string
 	IsSelfSigned     bool
-	RawPEM       string
+	RawPEM           string
 }
 
 // CertStatus holds the computed validity state for one cert in the chain.
@@ -82,16 +82,15 @@ type PositionResult struct {
 	RoleNew string
 	RoleOld string
 	Status  PositionStatus
-	Reason  string // non-empty for Renewed/Different/Added/Removed
 }
 
 // CheckResult holds the outcome of a live TLS certificate check against a host.
 type CheckResult struct {
-	Host        string
-	Port        int
-	Certs       []*CertDetails
-	Ordered     []*CertDetails
-	Statuses    []CertStatus
+	Host         string
+	Port         int
+	Certs        []*CertDetails
+	Ordered      []*CertDetails
+	Statuses     []CertStatus
 	SignatureErr error
 	Order        OrderCheckResult
 	RootPresent  bool
@@ -107,18 +106,11 @@ type InspectResult struct {
 
 // ComparisonResult holds the complete outcome of a two-file chain comparison.
 type ComparisonResult struct {
-	FileNew                string
-	FileOld                string
-	ParsedNew              []*CertDetails
-	ParsedOld              []*CertDetails
-	OrderedNew             []*CertDetails
-	OrderedOld             []*CertDetails
-	Positions              []PositionResult
-	IntermediatesIdentical bool
-	LeafSerialMatch        bool
-	LeafCNMatch            bool
-	// Passed is true when the comparison succeeds (leaf-only renewal or identical).
-	Passed bool
-	// Verdict is one of: "LEAF_RENEWED", "IDENTICAL", "FAIL"
-	Verdict string
+	FileNew    string
+	FileOld    string
+	ParsedNew  []*CertDetails
+	ParsedOld  []*CertDetails
+	OrderedNew []*CertDetails
+	OrderedOld []*CertDetails
+	Positions  []PositionResult
 }

@@ -40,8 +40,8 @@ func complianceIssues(cert *x509.Certificate) []string {
 
 	if cert.SerialNumber == nil || cert.SerialNumber.Sign() <= 0 {
 		issues = append(issues, "non-positive serial number (RFC 5280 §4.1.2.2)")
-	} else if len(cert.SerialNumber.Bytes()) > 20 {
-		issues = append(issues, fmt.Sprintf("serial number too long: %d bytes, max 20 (RFC 5280 §4.1.2.2)", len(cert.SerialNumber.Bytes())))
+	} else if n := len(cert.SerialNumber.Bytes()); n > 20 {
+		issues = append(issues, fmt.Sprintf("serial number too long: %d bytes, max 20 (RFC 5280 §4.1.2.2)", n))
 	}
 
 	if cert.Version != 3 && len(cert.Extensions) > 0 {
@@ -120,22 +120,22 @@ func extKeyUsageStrings(ekus []x509.ExtKeyUsage) []string {
 
 func newCertDetails(cert *x509.Certificate, rawPEM string, index int) *CertDetails {
 	return &CertDetails{
-		Index:        index,
-		Cert:         cert,
-		SubjectCN:    cert.Subject.CommonName,
-		IssuerCN:     cert.Issuer.CommonName,
-		SubjectDN:    cert.Subject.String(),
-		IssuerDN:     cert.Issuer.String(),
-		Serial:       formatSerial(cert.SerialNumber),
-		NotBeforeStr: cert.NotBefore.UTC().Format(certTimeFormat),
-		NotAfterStr:  cert.NotAfter.UTC().Format(certTimeFormat),
+		Index:            index,
+		Cert:             cert,
+		SubjectCN:        cert.Subject.CommonName,
+		IssuerCN:         cert.Issuer.CommonName,
+		SubjectDN:        cert.Subject.String(),
+		IssuerDN:         cert.Issuer.String(),
+		Serial:           formatSerial(cert.SerialNumber),
+		NotBeforeStr:     cert.NotBefore.UTC().Format(certTimeFormat),
+		NotAfterStr:      cert.NotAfter.UTC().Format(certTimeFormat),
 		Skid:             formatKeyId(cert.SubjectKeyId),
 		Akid:             formatKeyId(cert.AuthorityKeyId),
 		KeyUsages:        keyUsageStrings(cert.KeyUsage),
 		ExtKeyUsages:     extKeyUsageStrings(cert.ExtKeyUsage),
 		ComplianceIssues: complianceIssues(cert),
-		IsSelfSigned: isSelfSigned(cert),
-		RawPEM:       rawPEM,
+		IsSelfSigned:     isSelfSigned(cert),
+		RawPEM:           rawPEM,
 	}
 }
 
@@ -155,11 +155,7 @@ func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, er
 	raw := conn.ConnectionState().PeerCertificates
 	pems := make([]string, len(raw))
 	for i, c := range raw {
-		var buf bytes.Buffer
-		if err := pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}); err != nil {
-			return nil, nil, fmt.Errorf("failed to encode certificate %d: %w", i, err)
-		}
-		pems[i] = buf.String()
+		pems[i] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}))
 	}
 	return raw, pems, nil
 }
@@ -184,12 +180,7 @@ func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
 				return nil, nil, fmt.Errorf("failed to parse certificate: %v", err)
 			}
 			certs = append(certs, cert)
-
-			var buf bytes.Buffer
-			if err := pem.Encode(&buf, block); err != nil {
-				return nil, nil, fmt.Errorf("failed to encode PEM block: %w", err)
-			}
-			pems = append(pems, buf.String())
+			pems = append(pems, string(pem.EncodeToMemory(block)))
 		}
 		data = rest
 	}

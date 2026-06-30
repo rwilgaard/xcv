@@ -24,22 +24,16 @@ func Validate(path string) (*ValidationResult, error) {
 	ordered := orderChainDetails(parsedCerts)
 
 	statuses := computeCertStatuses(ordered)
-	allDatesValid := true
-	for _, s := range statuses {
-		if s.NotYetActive || s.Expired {
-			allDatesValid = false
-			break
-		}
-	}
+	datesOK := datesAllValid(statuses)
 
 	sigErr := verifySignaturesDetails(ordered)
 	orderCheck := computeOrderCheck(parsedCerts, ordered)
 	last := ordered[len(ordered)-1]
 	isCompleteChain := len(ordered) > 0 && last.IsSelfSigned && last.Cert.IsCA
 
-	passed := allDatesValid && sigErr == nil && isCompleteChain && orderCheck.Correct
+	passed := datesOK && sigErr == nil && isCompleteChain && orderCheck.Correct
 	var failReasons []string
-	if !allDatesValid {
+	if !datesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
 	}
 	if sigErr != nil {
@@ -78,22 +72,16 @@ func Check(host string, port int) (*CheckResult, error) {
 	ordered := orderChainDetails(parsed)
 
 	statuses := computeCertStatuses(ordered)
-	allDatesValid := true
-	for _, s := range statuses {
-		if s.NotYetActive || s.Expired {
-			allDatesValid = false
-			break
-		}
-	}
+	datesOK := datesAllValid(statuses)
 
 	sigErr := verifySignaturesDetails(ordered)
 	orderCheck := computeOrderCheck(parsed, ordered)
 
 	rootPresent := len(ordered) > 0 && ordered[len(ordered)-1].IsSelfSigned && ordered[len(ordered)-1].Cert.IsCA
 
-	passed := allDatesValid && sigErr == nil && orderCheck.Correct
+	passed := datesOK && sigErr == nil && orderCheck.Correct
 	var failReasons []string
-	if !allDatesValid {
+	if !datesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
 	}
 	if sigErr != nil {
@@ -206,7 +194,8 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 		} else {
 			result.Correct = false
 			result.Reasons = append(result.Reasons, fmt.Sprintf(
-				"Certificate at physical position %d (CN=%s) is not part of the active logical chain.", idx+1, cert.SubjectCN))
+				"Certificate at physical position %d (CN=%s) is not part of the active logical chain.", idx+1, cert.SubjectCN,
+			))
 		}
 		physical[idx] = entry
 	}
@@ -216,10 +205,12 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 		result.Correct = false
 		if len(parsedCerts) > len(ordered) {
 			result.Reasons = append(result.Reasons, fmt.Sprintf(
-				"File contains extra/duplicate certificates (File has %d, but logical chain only needs %d).", len(parsedCerts), len(ordered)))
+				"File contains extra/duplicate certificates (File has %d, but logical chain only needs %d).", len(parsedCerts), len(ordered),
+			))
 		} else {
 			result.Reasons = append(result.Reasons, fmt.Sprintf(
-				"Logical chain requires %d certificates, but file only contains %d.", len(ordered), len(parsedCerts)))
+				"Logical chain requires %d certificates, but file only contains %d.", len(ordered), len(parsedCerts),
+			))
 		}
 	} else {
 		for idx, cert := range ordered {
@@ -229,7 +220,8 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 				expectedRole := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
 				result.Reasons = append(result.Reasons, fmt.Sprintf(
 					"Positional mismatch at index %d. Expected CN=%s (%s), but found CN=%s.",
-					idx+1, cert.SubjectCN, expectedRole, phys.SubjectCN))
+					idx+1, cert.SubjectCN, expectedRole, phys.SubjectCN,
+				))
 			}
 		}
 	}
@@ -261,50 +253,20 @@ func Compare(fileNew, fileOld string) (*ComparisonResult, error) {
 	orderedNew := orderChainDetails(parsedNew)
 	orderedOld := orderChainDetails(parsedOld)
 
-	positions, intermediatesIdentical := computePositions(orderedNew, orderedOld)
-
-	var leafSerialMatch, leafCNMatch bool
-	if len(orderedNew) > 0 && len(orderedOld) > 0 {
-		leafSerialMatch = orderedNew[0].Serial == orderedOld[0].Serial
-		leafCNMatch = orderedNew[0].SubjectCN == orderedOld[0].SubjectCN
-	}
-
-	isOnlyLeafRenewed := len(orderedNew) == len(orderedOld) &&
-		len(orderedNew) > 0 &&
-		!leafSerialMatch &&
-		leafCNMatch &&
-		intermediatesIdentical
-
-	verdict := "FAIL"
-	passed := false
-	if isOnlyLeafRenewed {
-		verdict = "LEAF_RENEWED"
-		passed = true
-	} else if len(orderedNew) == len(orderedOld) && intermediatesIdentical && leafSerialMatch {
-		verdict = "IDENTICAL"
-		passed = true
-	}
-
 	return &ComparisonResult{
-		FileNew:                fileNew,
-		FileOld:                fileOld,
-		ParsedNew:              parsedNew,
-		ParsedOld:              parsedOld,
-		OrderedNew:             orderedNew,
-		OrderedOld:             orderedOld,
-		Positions:              positions,
-		IntermediatesIdentical: intermediatesIdentical,
-		LeafSerialMatch:        leafSerialMatch,
-		LeafCNMatch:            leafCNMatch,
-		Passed:                 passed,
-		Verdict:                verdict,
+		FileNew:    fileNew,
+		FileOld:    fileOld,
+		ParsedNew:  parsedNew,
+		ParsedOld:  parsedOld,
+		OrderedNew: orderedNew,
+		OrderedOld: orderedOld,
+		Positions:  computePositions(orderedNew, orderedOld),
 	}, nil
 }
 
-func computePositions(orderedNew, orderedOld []*CertDetails) ([]PositionResult, bool) {
+func computePositions(orderedNew, orderedOld []*CertDetails) []PositionResult {
 	maxLen := max(len(orderedNew), len(orderedOld))
 	positions := make([]PositionResult, maxLen)
-	intermediatesIdentical := true
 
 	for idx := range maxLen {
 		var certNew, certOld *CertDetails
@@ -327,27 +289,26 @@ func computePositions(orderedNew, orderedOld []*CertDetails) ([]PositionResult, 
 				p.Status = StatusIdentical
 			} else if certNew.SubjectCN == certOld.SubjectCN {
 				p.Status = StatusRenewed
-				if idx != 0 {
-					intermediatesIdentical = false
-					p.Reason = fmt.Sprintf("Intermediate/Root certificate at Position %d (CN=%s) has changed (Serial mismatch).", idx+1, certNew.SubjectCN)
-				}
 			} else {
 				p.Status = StatusDifferent
-				intermediatesIdentical = false
-				p.Reason = fmt.Sprintf("Certificate subject changed at Position %d: '%s' vs '%s'.", idx+1, certNew.SubjectCN, certOld.SubjectCN)
 			}
 		case certNew != nil:
 			p.Status = StatusAdded
-			intermediatesIdentical = false
-			p.Reason = fmt.Sprintf("Chain structure mismatch: New chain has extra certificate at Position %d (CN=%s).", idx+1, certNew.SubjectCN)
 		default:
 			p.Status = StatusRemoved
-			intermediatesIdentical = false
-			p.Reason = fmt.Sprintf("Chain structure mismatch: Old chain had certificate at Position %d (CN=%s) which is missing in New.", idx+1, certOld.SubjectCN)
 		}
 
 		positions[idx] = p
 	}
 
-	return positions, intermediatesIdentical
+	return positions
+}
+
+func datesAllValid(statuses []CertStatus) bool {
+	for _, s := range statuses {
+		if s.NotYetActive || s.Expired {
+			return false
+		}
+	}
+	return true
 }

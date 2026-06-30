@@ -129,9 +129,6 @@ certificate has changed (a clean renewal), or when chains are identical.`,
 				return err
 			}
 			xcv.PrintComparisonResult(r)
-			if !r.Passed {
-				os.Exit(1)
-			}
 			return nil
 		},
 	}
