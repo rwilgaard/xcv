@@ -34,6 +34,26 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+nix:
+  - name: xcv
+    ids: [xcv]
+    homepage: "https://github.com/rwilgaard/xcv"
+    description: "CLI tool for inspecting, validating, and comparing X.509 certificate chains"
+    license: "mit"
+    main_program: "xcv"
+    dependencies:
+      - name: installShellFiles
+    post_install: |
+      installShellCompletion --cmd xcv \
+        --zsh <($out/bin/xcv completion zsh) \
+        --bash <($out/bin/xcv completion bash) \
+        --fish <($out/bin/xcv completion fish)
+    repository:
+      owner: rwilgaard
+      name: nix-packages
+      branch: main
+      token: "{{ .Env.NIX_PACKAGES_TOKEN }}"
+
 changelog:
   sort: asc
   filters:
