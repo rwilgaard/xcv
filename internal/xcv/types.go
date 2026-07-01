@@ -2,7 +2,6 @@ package xcv
 
 import "crypto/x509"
 
-// CertDetails holds parsed fields from a single x509.Certificate.
 type CertDetails struct {
 	Index            int
 	Cert             *x509.Certificate
@@ -22,7 +21,6 @@ type CertDetails struct {
 	RawPEM           string
 }
 
-// CertStatus holds the computed validity state for one cert in the chain.
 type CertStatus struct {
 	Cert         *CertDetails
 	Role         string
@@ -33,22 +31,18 @@ type CertStatus struct {
 	AkidMismatch bool
 }
 
-// PhysicalEntry is one cert as it physically appears in the PEM file,
-// annotated with its logical position in the ordered chain.
 type PhysicalEntry struct {
 	Cert         *CertDetails
 	LogicalIndex int    // -1 = not part of active chain
 	Role         string // "" if LogicalIndex == -1
 }
 
-// OrderCheckResult holds the outcome of PEM physical-order verification.
 type OrderCheckResult struct {
 	Correct  bool
 	Reasons  []string
 	Physical []PhysicalEntry
 }
 
-// ValidationResult holds the complete outcome of single-file chain validation.
 type ValidationResult struct {
 	Path            string
 	ParsedCerts     []*CertDetails
@@ -57,13 +51,11 @@ type ValidationResult struct {
 	SignatureErr    error
 	Order           OrderCheckResult
 	IsCompleteChain bool
-	// Passed is true when all checks pass.
-	Passed bool
+	Passed          bool
 	// FailReasons lists human-readable reasons when Passed == false.
 	FailReasons []string
 }
 
-// PositionStatus classifies how two certs at the same chain position relate.
 type PositionStatus int
 
 const (
@@ -74,7 +66,6 @@ const (
 	StatusRemoved
 )
 
-// PositionResult holds the comparison outcome at one chain position.
 type PositionResult struct {
 	Idx     int
 	New     *CertDetails // nil when Status == StatusRemoved
@@ -84,7 +75,6 @@ type PositionResult struct {
 	Status  PositionStatus
 }
 
-// CheckResult holds the outcome of a live TLS certificate check against a host.
 type CheckResult struct {
 	Host         string
 	Port         int
@@ -98,13 +88,11 @@ type CheckResult struct {
 	FailReasons  []string
 }
 
-// InspectResult holds parsed cert details for one or more certs with no chain validation.
 type InspectResult struct {
 	Path  string
 	Certs []*CertDetails
 }
 
-// ComparisonResult holds the complete outcome of a two-file chain comparison.
 type ComparisonResult struct {
 	FileNew    string
 	FileOld    string

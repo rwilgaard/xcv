@@ -173,15 +173,6 @@ func TestQuietSuppressesOutput(t *testing.T) {
 }
 
 func TestNoColorStripsANSI(t *testing.T) {
-	// Simulate what main does when --no-color is set
-	savedGreen, savedRed, savedYellow, savedCyan, savedBold, savedReset :=
-		Green, Red, Yellow, Cyan, Bold, Reset
-	Green, Red, Yellow, Cyan, Bold, Reset = "", "", "", "", "", ""
-	defer func() {
-		Green, Red, Yellow, Cyan, Bold, Reset =
-			savedGreen, savedRed, savedYellow, savedCyan, savedBold, savedReset
-	}()
-
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 	path := writePEM(t, []*x509.Certificate{leaf, root})
@@ -189,6 +180,15 @@ func TestNoColorStripsANSI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+
+	// Confirm the renderer actually emits ANSI — makes the NoColor check meaningful.
+	withColor := renderValidationResult(r, 80)
+	if !strings.Contains(withColor, "\033[") {
+		t.Fatal("expected ANSI escape codes in colored render, but found none")
+	}
+
+	NoColor = true
+	defer func() { NoColor = false }()
 
 	old := os.Stdout
 	pr, pw, _ := os.Pipe()
@@ -423,11 +423,11 @@ func TestCompare(t *testing.T) {
 	leaf3, _ := makeCert(t, "Test Leaf V2", false, root, rootKey) // different CN
 
 	tests := []struct {
-		name             string
-		newCerts         []*x509.Certificate
-		oldCerts         []*x509.Certificate
-		wantLeafStatus   PositionStatus
-		wantRootStatus   PositionStatus
+		name           string
+		newCerts       []*x509.Certificate
+		oldCerts       []*x509.Certificate
+		wantLeafStatus PositionStatus
+		wantRootStatus PositionStatus
 	}{
 		{
 			name:           "leaf renewed",
