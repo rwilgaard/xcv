@@ -313,7 +313,7 @@ func renderCheckResult(r *CheckResult, width int) string {
 	return sb.String()
 }
 
-func renderInspectResult(r *InspectResult, width int) string {
+func renderShowResult(r *ShowResult, width int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s\n", sCyan.Bold(true).Render("Certificate Inspector"))
 	fmt.Fprintf(&sb, "%s\n", sDim.Render("File: "+r.Path))
@@ -378,7 +378,7 @@ func renderInspectResult(r *InspectResult, width int) string {
 	return sb.String()
 }
 
-func renderComparisonResult(r *ComparisonResult, width int) string {
+func renderDiffResult(r *DiffResult, width int) string {
 	colWidth := max((width-8)/2, 20)
 
 	var sb strings.Builder
@@ -435,10 +435,12 @@ func PrintCheckResult(r *CheckResult) {
 	display(func(w int) string { return renderCheckResult(r, w) })
 }
 
-func PrintInspectResult(r *InspectResult) {
-	display(func(w int) string { return renderInspectResult(r, w) })
+// PrintShowResult renders the result of a Show call to stdout (or the pager).
+func PrintShowResult(r *ShowResult) {
+	display(func(w int) string { return renderShowResult(r, w) })
 }
 
-func PrintComparisonResult(r *ComparisonResult) {
-	display(func(w int) string { return renderComparisonResult(r, w) })
+// PrintDiffResult renders the result of a Diff call to stdout (or the pager).
+func PrintDiffResult(r *DiffResult) {
+	display(func(w int) string { return renderDiffResult(r, w) })
 }

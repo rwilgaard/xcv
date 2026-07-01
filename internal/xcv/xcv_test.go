@@ -277,19 +277,19 @@ func TestValidate_ExtraUnrelatedCert(t *testing.T) {
 	}
 }
 
-func TestPrintInspectResult(t *testing.T) {
+func TestPrintShowResult(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 	path := writePEM(t, []*x509.Certificate{leaf, root})
-	r, err := Inspect(path)
+	r, err := Show(path)
 	if err != nil {
-		t.Fatalf("Inspect: %v", err)
+		t.Fatalf("Show: %v", err)
 	}
 
 	old := os.Stdout
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
-	PrintInspectResult(r)
+	PrintShowResult(r)
 	if err := pw.Close(); err != nil {
 		t.Errorf("close write pipe: %v", err)
 	}
@@ -307,19 +307,19 @@ func TestPrintInspectResult(t *testing.T) {
 	}
 }
 
-func TestPrintInspectResult_Quiet(t *testing.T) {
+func TestPrintShowResult_Quiet(t *testing.T) {
 	root, _ := makeCert(t, "Root CA", true, nil, nil)
 	path := writePEM(t, []*x509.Certificate{root})
-	r, err := Inspect(path)
+	r, err := Show(path)
 	if err != nil {
-		t.Fatalf("Inspect: %v", err)
+		t.Fatalf("Show: %v", err)
 	}
 
 	old := os.Stdout
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
 	Quiet = true
-	PrintInspectResult(r)
+	PrintShowResult(r)
 	Quiet = false
 	if err := pw.Close(); err != nil {
 		t.Errorf("close write pipe: %v", err)
@@ -335,22 +335,22 @@ func TestPrintInspectResult_Quiet(t *testing.T) {
 	}
 }
 
-func TestPrintComparisonResult(t *testing.T) {
+func TestPrintDiffResult(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf1, _ := makeCert(t, "Leaf", false, root, rootKey)
 	leaf2, _ := makeCert(t, "Leaf", false, root, rootKey)
 
 	fileNew := writePEM(t, []*x509.Certificate{leaf2, root})
 	fileOld := writePEM(t, []*x509.Certificate{leaf1, root})
-	r, err := Compare(fileNew, fileOld)
+	r, err := Diff(fileNew, fileOld)
 	if err != nil {
-		t.Fatalf("Compare: %v", err)
+		t.Fatalf("Diff: %v", err)
 	}
 
 	old := os.Stdout
 	pr, pw, _ := os.Pipe()
 	os.Stdout = pw
-	PrintComparisonResult(r)
+	PrintDiffResult(r)
 	if err := pw.Close(); err != nil {
 		t.Errorf("close write pipe: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestPrintCheckResult(t *testing.T) {
 	}
 }
 
-func TestCompare(t *testing.T) {
+func TestDiff(t *testing.T) {
 	root, rootKey := makeCert(t, "Test Root CA", true, nil, nil)
 	leaf1, _ := makeCert(t, "Test Leaf", false, root, rootKey)
 	leaf2, _ := makeCert(t, "Test Leaf", false, root, rootKey)    // renewed: same CN, different serial
@@ -456,9 +456,9 @@ func TestCompare(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fileNew := writePEM(t, tc.newCerts)
 			fileOld := writePEM(t, tc.oldCerts)
-			r, err := Compare(fileNew, fileOld)
+			r, err := Diff(fileNew, fileOld)
 			if err != nil {
-				t.Fatalf("Compare returned error: %v", err)
+				t.Fatalf("Diff returned error: %v", err)
 			}
 			if len(r.Positions) < 2 {
 				t.Fatalf("expected at least 2 positions, got %d", len(r.Positions))
@@ -473,7 +473,7 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-func TestInspect(t *testing.T) {
+func TestShow(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 
@@ -490,9 +490,9 @@ func TestInspect(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePEM(t, tc.certs)
-			r, err := Inspect(path)
+			r, err := Show(path)
 			if err != nil {
-				t.Fatalf("Inspect returned error: %v", err)
+				t.Fatalf("Show returned error: %v", err)
 			}
 			if len(r.Certs) != tc.wantCount {
 				t.Errorf("len(Certs) = %d, want %d", len(r.Certs), tc.wantCount)
@@ -504,7 +504,7 @@ func TestInspect(t *testing.T) {
 	}
 }
 
-func TestInspect_EmptyFile(t *testing.T) {
+func TestShow_EmptyFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "*.pem")
 	if err != nil {
 		t.Fatalf("create temp file: %v", err)
@@ -512,7 +512,7 @@ func TestInspect_EmptyFile(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	_, err = Inspect(f.Name())
+	_, err = Show(f.Name())
 	if err == nil {
 		t.Fatal("expected error for empty file, got nil")
 	}

@@ -88,12 +88,14 @@ type CheckResult struct {
 	FailReasons  []string
 }
 
-type InspectResult struct {
+// ShowResult holds the certificates parsed from a PEM file for display.
+type ShowResult struct {
 	Path  string
 	Certs []*CertDetails
 }
 
-type ComparisonResult struct {
+// DiffResult holds the outcome of comparing two PEM certificate chain files.
+type DiffResult struct {
 	FileNew    string
 	FileOld    string
 	ParsedNew  []*CertDetails

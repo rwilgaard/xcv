@@ -26,7 +26,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoPager, "no-pager", false, "Print directly to stdout instead of opening a pager")
 	rootCmd.PersistentFlags().BoolVar(&xcv.Quiet, "quiet", false, "Suppress all output; rely on exit codes only")
 
-	rootCmd.AddCommand(newCheckCmd(), newInspectCmd(), newValidateCmd(), newCompareCmd())
+	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		printErr(err.Error())
@@ -76,9 +76,9 @@ Accepts: example.com, example.com:8443, https://example.com`,
 	return cmd
 }
 
-func newInspectCmd() *cobra.Command {
+func newShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "inspect <file>",
+		Use:   "show <file>",
 		Short: "Display certificate details without chain validation",
 		Long: `Parse a PEM file and display certificate details (subject, issuer, serial,
 validity, key usage, RFC compliance issues) for each certificate.
@@ -86,11 +86,11 @@ No chain validation, no PASS/FAIL — information only.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Inspect(args[0])
+			r, err := xcv.Show(args[0])
 			if err != nil {
 				return err
 			}
-			xcv.PrintInspectResult(r)
+			xcv.PrintShowResult(r)
 			return nil
 		},
 	}
@@ -118,19 +118,19 @@ cryptographic signatures, chain completeness, and physical PEM ordering.`,
 	}
 }
 
-func newCompareCmd() *cobra.Command {
+func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:          "compare <old_file> <new_file>",
+		Use:          "diff <old_file> <new_file>",
 		Short:        "Compare two PEM certificate chain files",
 		Long:         `Compare two PEM certificate chain files side-by-side (old on left, new on right).`,
 		Args:         cobra.ExactArgs(2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Compare(args[1], args[0])
+			r, err := xcv.Diff(args[1], args[0])
 			if err != nil {
 				return err
 			}
-			xcv.PrintComparisonResult(r)
+			xcv.PrintDiffResult(r)
 			return nil
 		},
 	}

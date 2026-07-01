@@ -99,7 +99,8 @@ func Check(host string, port int) (*CheckResult, error) {
 	}, nil
 }
 
-func Inspect(path string) (*InspectResult, error) {
+// Show parses a PEM file and returns certificate details without chain validation.
+func Show(path string) (*ShowResult, error) {
 	certs, pems, err := parseCertsFromFile(path)
 	if err != nil {
 		return nil, err
@@ -107,7 +108,7 @@ func Inspect(path string) (*InspectResult, error) {
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("no certificate blocks found in file; ensure certificates are in PEM format")
 	}
-	return &InspectResult{
+	return &ShowResult{
 		Path:  path,
 		Certs: buildCertDetails(certs, pems),
 	}, nil
@@ -219,7 +220,8 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 	return result
 }
 
-func Compare(fileNew, fileOld string) (*ComparisonResult, error) {
+// Diff compares two PEM certificate chain files and returns their position-by-position comparison.
+func Diff(fileNew, fileOld string) (*DiffResult, error) {
 	certsNew, pemsNew, err := parseCertsFromFile(fileNew)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read/parse %s: %w", fileNew, err)
@@ -241,7 +243,7 @@ func Compare(fileNew, fileOld string) (*ComparisonResult, error) {
 	orderedNew := orderChainDetails(parsedNew)
 	orderedOld := orderChainDetails(parsedOld)
 
-	return &ComparisonResult{
+	return &DiffResult{
 		FileNew:    fileNew,
 		FileOld:    fileOld,
 		ParsedNew:  parsedNew,
