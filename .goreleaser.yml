@@ -41,8 +41,6 @@ nix:
     description: "CLI tool for inspecting, validating, and comparing X.509 certificate chains"
     license: "mit"
     main_program: "xcv"
-    dependencies:
-      - name: installShellFiles
     post_install: |
       installShellCompletion --cmd xcv \
         --zsh <($out/bin/xcv completion zsh) \
