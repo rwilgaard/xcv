@@ -160,15 +160,9 @@ func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, er
 	return raw, pems, nil
 }
 
-func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
+func parseCertsFromBytes(data []byte) ([]*x509.Certificate, []string, error) {
 	var certs []*x509.Certificate
 	var pems []string
-
 	for {
 		block, rest := pem.Decode(data)
 		if block == nil {
@@ -184,8 +178,15 @@ func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
 		}
 		data = rest
 	}
-
 	return certs, pems, nil
+}
+
+func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return parseCertsFromBytes(data)
 }
 
 func buildCertDetails(certs []*x509.Certificate, pems []string) []*CertDetails {

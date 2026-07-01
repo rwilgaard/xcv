@@ -26,7 +26,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoPager, "no-pager", false, "Print directly to stdout instead of opening a pager")
 	rootCmd.PersistentFlags().BoolVar(&xcv.Quiet, "quiet", false, "Suppress all output; rely on exit codes only")
 
-	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd())
+	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd(), newMatchCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		printErr(err.Error())
@@ -131,6 +131,32 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 			xcv.PrintDiffResult(r)
+			return nil
+		},
+	}
+}
+
+func newMatchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "match <file1> <file2>",
+		Short: "Verify a private key corresponds to a certificate",
+		Long: `Check whether a private key's public key matches the public key embedded in
+a certificate. File order is flexible — the command detects which file is
+the certificate and which is the private key from PEM block headers.
+
+Supported key formats: PKCS#8 (BEGIN PRIVATE KEY), PKCS#1 RSA (BEGIN RSA PRIVATE KEY),
+SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.`,
+		Args:         cobra.ExactArgs(2),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r, err := xcv.Match(args[0], args[1])
+			if err != nil {
+				return err
+			}
+			xcv.PrintMatchResult(r)
+			if !r.Matched {
+				os.Exit(1)
+			}
 			return nil
 		},
 	}

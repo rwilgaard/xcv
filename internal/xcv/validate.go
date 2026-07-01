@@ -1,8 +1,16 @@
 package xcv
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +119,75 @@ func Show(path string) (*ShowResult, error) {
 	return &ShowResult{
 		Path:  path,
 		Certs: buildCertDetails(certs, pems),
+	}, nil
+}
+
+// Match determines whether a private key corresponds to the public key embedded
+// in a certificate. path1 and path2 may be given in either order — the function
+// detects which file contains the certificate and which contains the private key
+// by inspecting PEM block types.
+func Match(path1, path2 string) (*MatchResult, error) {
+	data1, err := os.ReadFile(path1)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path1, err)
+	}
+	data2, err := os.ReadFile(path2)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path2, err)
+	}
+
+	has1Cert, has1Key := classifyPEM(data1)
+	has2Cert, has2Key := classifyPEM(data2)
+
+	var certPath, keyPath string
+	var certData, keyData []byte
+
+	switch {
+	case has1Cert && has2Key && !has2Cert:
+		certPath, keyPath = path1, path2
+		certData, keyData = data1, data2
+	case has2Cert && has1Key && !has1Cert:
+		certPath, keyPath = path2, path1
+		certData, keyData = data2, data1
+	case !has1Cert && !has2Cert:
+		return nil, fmt.Errorf("neither file contains a certificate — expected one cert file and one key file")
+	case !has1Key && !has2Key:
+		return nil, fmt.Errorf("neither file contains a private key; provide one certificate file and one key file")
+	default:
+		return nil, fmt.Errorf("ambiguous input: could not determine which file is the certificate and which is the key")
+	}
+
+	certs, pems, err := parseCertsFromBytes(certData)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate file %s: %w", certPath, err)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no certificates found in %s", certPath)
+	}
+	leaf := orderChainDetails(buildCertDetails(certs, pems))[0]
+
+	certFP, err := pubKeyFingerprint(leaf.Cert.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("fingerprint cert public key: %w", err)
+	}
+
+	keyPub, keyType, err := extractPublicKeyFromPEM(keyData)
+	if err != nil {
+		return nil, fmt.Errorf("parse key file %s: %w", keyPath, err)
+	}
+	keyFP, err := pubKeyFingerprint(keyPub)
+	if err != nil {
+		return nil, fmt.Errorf("fingerprint key public key: %w", err)
+	}
+
+	return &MatchResult{
+		CertPath:    certPath,
+		KeyPath:     keyPath,
+		CertSubject: leaf.SubjectCN,
+		KeyType:     keyType,
+		CertPubKey:  certFP,
+		KeyPubKey:   keyFP,
+		Matched:     certFP == keyFP,
 	}, nil
 }
 
@@ -292,6 +369,78 @@ func computePositions(orderedNew, orderedOld []*CertDetails) []PositionResult {
 	}
 
 	return positions
+}
+
+func classifyPEM(data []byte) (hasCert, hasKey bool) {
+	for {
+		block, rest := pem.Decode(data)
+		if block == nil {
+			return
+		}
+		switch block.Type {
+		case "CERTIFICATE":
+			hasCert = true
+		case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY":
+			hasKey = true
+		}
+		if hasCert && hasKey {
+			return
+		}
+		data = rest
+	}
+}
+
+func extractPublicKeyFromPEM(data []byte) (crypto.PublicKey, string, error) {
+	for {
+		block, rest := pem.Decode(data)
+		if block == nil {
+			break
+		}
+		data = rest
+		switch block.Type {
+		case "PRIVATE KEY":
+			key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			if err != nil {
+				return nil, "", fmt.Errorf("parse PKCS#8 key: %w", err)
+			}
+			return privateKeyPublic(key)
+		case "RSA PRIVATE KEY":
+			key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+			if err != nil {
+				return nil, "", fmt.Errorf("parse RSA PKCS#1 key: %w", err)
+			}
+			return key.Public(), "RSA", nil
+		case "EC PRIVATE KEY":
+			key, err := x509.ParseECPrivateKey(block.Bytes)
+			if err != nil {
+				return nil, "", fmt.Errorf("parse EC key: %w", err)
+			}
+			return key.Public(), "ECDSA", nil
+		}
+	}
+	return nil, "", fmt.Errorf("no supported private key block found (expected PRIVATE KEY, RSA PRIVATE KEY, or EC PRIVATE KEY)")
+}
+
+func privateKeyPublic(key any) (crypto.PublicKey, string, error) {
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		return k.Public(), "RSA", nil
+	case *ecdsa.PrivateKey:
+		return k.Public(), "ECDSA", nil
+	case ed25519.PrivateKey:
+		return k.Public(), "Ed25519", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported PKCS#8 key type: %T", key)
+	}
+}
+
+func pubKeyFingerprint(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+	sum := sha256.Sum256(der)
+	return fmt.Sprintf("%x", sum), nil
 }
 
 func datesAllValid(statuses []CertStatus) bool {
