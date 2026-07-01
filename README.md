@@ -9,7 +9,7 @@ Works on macOS, Linux, and Windows.
 - Pull and verify a live TLS certificate chain from any host
 - Validate signatures, expiration, and PEM order (`Leaf → Intermediates → Root`)
 - Detect RFC 5280 violations and show key usage per certificate
-- Compare two bundles to confirm only the leaf changed during renewal
+- Compare two bundles side-by-side to inspect what changed between renewals
 
 ## Installation
 
@@ -34,7 +34,7 @@ make uninstall
 ## Usage
 
 ```
-xcv [--no-color] [--quiet] [--version] <subcommand> [flags] <args>
+xcv [--no-color] [--no-pager] [--quiet] [--version] <subcommand> [flags] <args>
 ```
 
 Global flags work before or after the subcommand.
@@ -44,6 +44,7 @@ Global flags work before or after the subcommand.
 | Flag | Description |
 |------|-------------|
 | `--no-color` | Strip ANSI color codes (useful for log files and CI) |
+| `--no-pager` | Print directly to stdout instead of opening a pager |
 | `--quiet` | Suppress all output; rely on exit codes only |
 | `--version` | Print version and exit |
 | `--help` | Show help |
@@ -91,13 +92,13 @@ Shows subject, issuer, serial, validity, key usage, and any RFC issues. No PASS/
 
 ### 4. Renewal Comparison
 
-Compare a new certificate bundle against an old one:
+Compare two certificate bundles side-by-side (old on left, new on right):
 
 ```bash
-xcv compare new_chain.pem old_chain.pem
+xcv compare old_chain.pem new_chain.pem
 ```
 
-Passes if only the leaf changed. Fails if any intermediate or root was modified, dropped, or swapped out.
+Shows each chain position as identical, renewed, different, added, or removed. No PASS/FAIL — inspect the diff and decide.
 
 ---
 
