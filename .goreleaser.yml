@@ -41,6 +41,11 @@ nix:
     description: "CLI tool for inspecting, validating, and comparing X.509 certificate chains"
     license: "mit"
     main_program: "xcv"
+    install: |
+      runHook preInstall
+      mkdir -p $out/bin
+      cp -vr ./xcv $out/bin/xcv
+      runHook postInstall
     post_install: |
       installShellCompletion --cmd xcv \
         --zsh <($out/bin/xcv completion zsh) \
