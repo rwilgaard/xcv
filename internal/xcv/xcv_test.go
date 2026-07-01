@@ -78,6 +78,28 @@ func writePEM(t *testing.T, certs []*x509.Certificate) string {
 	return f.Name()
 }
 
+// writeKeyPEM writes an ECDSA private key as PKCS#8 PEM to a temp file.
+func writeKeyPEM(t *testing.T, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "*.key.pem")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			t.Errorf("close temp file: %v", cerr)
+		}
+	}()
+	if err := pem.Encode(f, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
+		t.Fatalf("encode pem: %v", err)
+	}
+	return f.Name()
+}
+
 func TestValidate(t *testing.T) {
 	root, rootKey := makeCert(t, "Test Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Test Leaf", false, root, rootKey)
@@ -515,6 +537,114 @@ func TestShow_EmptyFile(t *testing.T) {
 	_, err = Show(f.Name())
 	if err == nil {
 		t.Fatal("expected error for empty file, got nil")
+	}
+}
+
+func TestMatch(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
+	_, otherKey := makeCert(t, "other.com", false, root, rootKey)
+
+	leafPEM := writePEM(t, []*x509.Certificate{leaf})
+	leafKeyPEM := writeKeyPEM(t, leafKey)
+	otherKeyPEM := writeKeyPEM(t, otherKey)
+	chainPEM := writePEM(t, []*x509.Certificate{leaf, root})
+
+	tests := []struct {
+		name        string
+		path1       string
+		path2       string
+		wantMatched bool
+		wantErr     bool
+	}{
+		{
+			name:        "cert then key - match",
+			path1:       leafPEM,
+			path2:       leafKeyPEM,
+			wantMatched: true,
+		},
+		{
+			name:        "key then cert - match (order independent)",
+			path1:       leafKeyPEM,
+			path2:       leafPEM,
+			wantMatched: true,
+		},
+		{
+			name:        "cert then wrong key - mismatch",
+			path1:       leafPEM,
+			path2:       otherKeyPEM,
+			wantMatched: false,
+		},
+		{
+			name:        "chain file then key - uses leaf cert",
+			path1:       chainPEM,
+			path2:       leafKeyPEM,
+			wantMatched: true,
+		},
+		{
+			name:    "two cert files - error",
+			path1:   leafPEM,
+			path2:   chainPEM,
+			wantErr: true,
+		},
+		{
+			name:    "two key files - error",
+			path1:   leafKeyPEM,
+			path2:   otherKeyPEM,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Match(tc.path1, tc.path2)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Match returned error: %v", err)
+			}
+			if r.Matched != tc.wantMatched {
+				t.Errorf("Matched = %v, want %v; CertPubKey=%s KeyPubKey=%s",
+					r.Matched, tc.wantMatched, r.CertPubKey, r.KeyPubKey)
+			}
+		})
+	}
+}
+
+func TestPrintMatchResult(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
+
+	certPEM := writePEM(t, []*x509.Certificate{leaf})
+	keyPEM := writeKeyPEM(t, leafKey)
+
+	r, err := Match(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+
+	old := os.Stdout
+	pr, pw, _ := os.Pipe()
+	os.Stdout = pw
+	PrintMatchResult(r)
+	if err := pw.Close(); err != nil {
+		t.Errorf("close write pipe: %v", err)
+	}
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(pr); err != nil {
+		t.Fatalf("read from pipe: %v", err)
+	}
+	output := buf.String()
+	for _, want := range []string{"Certificate Key Match", "example.com", "MATCH"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q", want)
+		}
 	}
 }
 

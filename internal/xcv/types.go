@@ -104,3 +104,15 @@ type DiffResult struct {
 	OrderedOld []*CertDetails
 	Positions  []PositionResult
 }
+
+// MatchResult holds the outcome of comparing a certificate's public key
+// against a private key's public key.
+type MatchResult struct {
+	CertPath    string
+	KeyPath     string
+	CertSubject string
+	KeyType     string
+	CertPubKey  string // hex SHA-256 of PKIX-marshaled cert public key
+	KeyPubKey   string // hex SHA-256 of PKIX-marshaled key's public key
+	Matched     bool
+}

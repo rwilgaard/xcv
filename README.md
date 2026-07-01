@@ -10,6 +10,7 @@ Works on macOS, Linux, and Windows.
 - Validate signatures, expiration, and PEM order (`Leaf → Intermediates → Root`)
 - Detect RFC 5280 violations and show key usage per certificate
 - Compare two bundles side-by-side to inspect what changed between renewals
+- Verify a private key corresponds to a certificate's public key
 
 ## Installation
 
@@ -83,7 +84,7 @@ Checks the chain is complete, signatures are valid, nothing is expired, certs ar
 Display detailed information about a PEM file without running chain validation:
 
 ```bash
-xcv inspect cert.pem
+xcv show cert.pem
 ```
 
 Shows subject, issuer, serial, validity, key usage, and any RFC issues. No PASS/FAIL — just information. Useful when you have a single cert or an incomplete bundle and don't need full chain verification.
@@ -95,10 +96,22 @@ Shows subject, issuer, serial, validity, key usage, and any RFC issues. No PASS/
 Compare two certificate bundles side-by-side (old on left, new on right):
 
 ```bash
-xcv compare old_chain.pem new_chain.pem
+xcv diff old_chain.pem new_chain.pem
 ```
 
 Shows each chain position as identical, renewed, different, added, or removed. No PASS/FAIL — inspect the diff and decide.
+
+---
+
+### 5. Cert/Key Match
+
+Verify a certificate and private key correspond:
+
+```bash
+xcv match cert.pem key.pem
+```
+
+Works regardless of argument order — xcv detects which file is the cert and which is the key.
 
 ---
 
@@ -107,8 +120,9 @@ Shows each chain position as identical, renewed, different, added, or removed. N
 ```bash
 xcv check --help
 xcv validate --help
-xcv inspect --help
-xcv compare --help
+xcv show --help
+xcv diff --help
+xcv match --help
 ```
 
 ### Shell completions
@@ -122,7 +136,7 @@ xcv completion bash   # or: zsh, fish, powershell
 | Code | Meaning |
 |------|---------|
 | `0` | Passed — chain valid, renewal clean, or parse succeeded |
-| `1` | Failed — broken chain, expired cert, wrong order, or unexpected changes |
+| `1` | Failed — broken chain, expired cert, wrong order, or key mismatch |
 
 Works well in pre-commit hooks, CI pipelines, or deployment scripts.
 

@@ -40,36 +40,32 @@ func certField(key, val string) string {
 	return sDim.Render(key+":") + " " + val + "\n"
 }
 
-func renderCertBlock(c *CertDetails, s CertStatus, ordered []*CertDetails, idx int) string {
-	var sb strings.Builder
-
-	roleColor := sYellow
-	switch {
-	case idx == 0:
-		roleColor = sGreen
-	case c.IsSelfSigned && c.Cert.IsCA:
-		roleColor = sCyan
+func renderPageHeader(sb *strings.Builder, title string, meta []string, width int) {
+	fmt.Fprintf(sb, "%s\n", sCyan.Bold(true).Render(title))
+	for _, m := range meta {
+		fmt.Fprintf(sb, "%s\n", sDim.Render(m))
 	}
+	fmt.Fprintf(sb, "%s\n\n", sepEq(width))
+}
 
-	fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", idx+1, s.Role)))
+// notYetActive and expired are mutually exclusive; daysLeft is used only when both are false.
+func renderCertCommonFields(sb *strings.Builder, c *CertDetails, notYetActive, expired bool, daysLeft int) {
 	sb.WriteString(certField("Subject CN", sBold.Render(c.SubjectCN)))
 	sb.WriteString(certField("Subject DN", c.SubjectDN))
 	sb.WriteString(certField("Issuer CN", c.IssuerCN))
 	sb.WriteString(certField("Issuer DN", c.IssuerDN))
 	sb.WriteString(certField("Serial", c.Serial))
 	sb.WriteString(certField("Validity", c.NotBeforeStr+" → "+c.NotAfterStr))
-
 	switch {
-	case s.NotYetActive:
+	case notYetActive:
 		activates := c.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second)
 		sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("NOT YET ACTIVE (activates in %s)", activates))))
-	case s.Expired:
+	case expired:
 		ago := time.Now().UTC().Sub(c.Cert.NotAfter.UTC()).Round(time.Second)
 		sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("EXPIRED (%s ago)", ago))))
 	default:
-		sb.WriteString(certField("Status", sPass.Render(fmt.Sprintf("ACTIVE (%d days remaining)", s.DaysLeft))))
+		sb.WriteString(certField("Status", sPass.Render(fmt.Sprintf("ACTIVE (%d days remaining)", daysLeft))))
 	}
-
 	if c.Skid != "" {
 		sb.WriteString(certField("SKID", c.Skid))
 	}
@@ -83,8 +79,82 @@ func renderCertBlock(c *CertDetails, s CertStatus, ordered []*CertDetails, idx i
 		sb.WriteString(certField("Ext Key Use", strings.Join(c.ExtKeyUsages, ", ")))
 	}
 	for _, issue := range c.ComplianceIssues {
-		fmt.Fprintf(&sb, "%s\n", sFail.Render("RFC Violation: "+issue))
+		fmt.Fprintf(sb, "%s\n", sFail.Render("RFC Violation: "+issue))
 	}
+}
+
+func renderChainStructureSection(sb *strings.Builder, ordered []*CertDetails, width int) {
+	fmt.Fprintf(sb, "%s\n", label("Chain Structure"))
+	sb.WriteString(renderChainTree(ordered))
+	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
+}
+
+func renderCertBlocksSection(sb *strings.Builder, statuses []CertStatus, ordered []*CertDetails, width int) {
+	for idx, s := range statuses {
+		sb.WriteString(renderCertBlock(s.Cert, s, ordered, idx))
+		sb.WriteString("\n")
+	}
+	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
+}
+
+func renderSigSection(sb *strings.Builder, sigErr error, width int) {
+	sb.WriteString(renderSignatureVerification(sigErr))
+	fmt.Fprintf(sb, "\n%s\n\n", sepDash(width))
+}
+
+func renderPassFail(sb *strings.Builder, passed bool, successMsg, failMsg string, reasons []string, width int, notes ...string) {
+	fmt.Fprintf(sb, "\n%s\n", sepEq(width))
+	for _, n := range notes {
+		fmt.Fprintf(sb, "%s\n", n)
+	}
+	if passed {
+		fmt.Fprintf(sb, "%s\n", sPass.Render(successMsg))
+	} else {
+		fmt.Fprintf(sb, "%s\n", sFail.Render(failMsg))
+		fmt.Fprintf(sb, "Reasons: %s\n", strings.Join(reasons, "; "))
+	}
+}
+
+func renderOrderSection(sb *strings.Builder, sectionLabel, physicalLabel string, ordered []*CertDetails, physical []PhysicalEntry, correct bool, reasons []string) {
+	fmt.Fprintf(sb, "%s\n", label(sectionLabel))
+	sb.WriteString("  Expected (Leaf → Root):\n")
+	for idx, cert := range ordered {
+		role := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
+		fmt.Fprintf(sb, "    %d. %s (%s)\n", idx+1, sBold.Render(cert.SubjectCN), role)
+	}
+	fmt.Fprintf(sb, "\n  %s:\n", physicalLabel)
+	for idx, e := range physical {
+		var roleDisp string
+		if e.LogicalIndex != -1 {
+			roleDisp = "(" + e.Role + ")"
+		} else {
+			roleDisp = sFail.Render("(unrelated)")
+		}
+		fmt.Fprintf(sb, "    %d. %s %s\n", idx+1, sBold.Render(e.Cert.SubjectCN), roleDisp)
+	}
+	if correct {
+		fmt.Fprintf(sb, "\n  %s — order is correct.\n", sPass.Render("PASS"))
+	} else {
+		fmt.Fprintf(sb, "\n  %s — order is incorrect.\n", sFail.Render("FAIL"))
+		for _, reason := range reasons {
+			fmt.Fprintf(sb, "  · %s\n", reason)
+		}
+	}
+}
+
+func renderCertBlock(c *CertDetails, s CertStatus, ordered []*CertDetails, idx int) string {
+	var sb strings.Builder
+
+	roleColor := sYellow
+	switch {
+	case idx == 0:
+		roleColor = sGreen
+	case c.IsSelfSigned && c.Cert.IsCA:
+		roleColor = sCyan
+	}
+
+	fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", idx+1, s.Role)))
+	renderCertCommonFields(&sb, c, s.NotYetActive, s.Expired, s.DaysLeft)
 	if s.AkidMismatch && idx < len(ordered)-1 {
 		parent := ordered[idx+1]
 		fmt.Fprintf(&sb, "%s\n", sWarn.Render("Warning: AKID mismatch with parent SKID"))
@@ -195,129 +265,47 @@ func renderComparePanel(cert *CertDetails, role string) string {
 
 func renderValidationResult(r *ValidationResult, width int) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", sCyan.Bold(true).Render("Certificate Chain Validation"))
-	fmt.Fprintf(&sb, "%s\n", sDim.Render("File: "+r.Path))
-	fmt.Fprintf(&sb, "%s\n\n", sepEq(width))
-
+	renderPageHeader(&sb, "Certificate Chain Validation", []string{"File: " + r.Path}, width)
 	fmt.Fprintf(&sb, "Found %d certificate(s) in the file.\n", len(r.ParsedCerts))
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
-
-	fmt.Fprintf(&sb, "%s\n", label("Chain Structure"))
-	sb.WriteString(renderChainTree(r.Ordered))
-	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
-
-	for idx, s := range r.Statuses {
-		sb.WriteString(renderCertBlock(s.Cert, s, r.Ordered, idx))
-		sb.WriteString("\n")
-	}
-	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
-
-	sb.WriteString(renderSignatureVerification(r.SignatureErr))
-	fmt.Fprintf(&sb, "\n%s\n\n", sepDash(width))
-
-	fmt.Fprintf(&sb, "%s\n", label("PEM File Order"))
-	sb.WriteString("  Expected (Leaf → Root):\n")
-	for idx, cert := range r.Ordered {
-		role := getCertRoleName(idx, len(r.Ordered), cert.IsSelfSigned, cert.Cert.IsCA)
-		fmt.Fprintf(&sb, "    %d. %s (%s)\n", idx+1, sBold.Render(cert.SubjectCN), role)
-	}
-	sb.WriteString("\n  Physical order in file:\n")
-	for idx, e := range r.Order.Physical {
-		var roleDisp string
-		if e.LogicalIndex != -1 {
-			roleDisp = "(" + e.Role + ")"
-		} else {
-			roleDisp = sFail.Render("(unrelated)")
-		}
-		fmt.Fprintf(&sb, "    %d. %s %s\n", idx+1, sBold.Render(e.Cert.SubjectCN), roleDisp)
-	}
-	if r.Order.Correct {
-		fmt.Fprintf(&sb, "\n  %s — order is correct.\n", sPass.Render("PASS"))
-	} else {
-		fmt.Fprintf(&sb, "\n  %s — order is incorrect.\n", sFail.Render("FAIL"))
-		for _, reason := range r.Order.Reasons {
-			fmt.Fprintf(&sb, "  · %s\n", reason)
-		}
-	}
-
-	fmt.Fprintf(&sb, "\n%s\n", sepEq(width))
-	if r.Passed {
-		fmt.Fprintf(&sb, "%s\n", sPass.Render("SUCCESS: chain is complete, valid, properly ordered, and cryptographically sound."))
-	} else {
-		fmt.Fprintf(&sb, "%s\n", sFail.Render("FAILURE: chain validation failed."))
-		fmt.Fprintf(&sb, "Reasons: %s\n", strings.Join(r.FailReasons, "; "))
-	}
+	renderChainStructureSection(&sb, r.Ordered, width)
+	renderCertBlocksSection(&sb, r.Statuses, r.Ordered, width)
+	renderSigSection(&sb, r.SignatureErr, width)
+	renderOrderSection(&sb, "PEM File Order", "Physical order in file", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
+	renderPassFail(&sb, r.Passed,
+		"SUCCESS: chain is complete, valid, properly ordered, and cryptographically sound.",
+		"FAILURE: chain validation failed.",
+		r.FailReasons, width)
 	return sb.String()
 }
 
 func renderCheckResult(r *CheckResult, width int) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", sCyan.Bold(true).Render("TLS Certificate Check"))
-	fmt.Fprintf(&sb, "%s\n", sDim.Render(fmt.Sprintf("Host: %s:%d", r.Host, r.Port)))
-	fmt.Fprintf(&sb, "%s\n\n", sepEq(width))
-
+	renderPageHeader(&sb, "TLS Certificate Check", []string{fmt.Sprintf("Host: %s:%d", r.Host, r.Port)}, width)
 	fmt.Fprintf(&sb, "Server presented %d certificate(s).\n", len(r.Certs))
 	if !r.RootPresent {
 		fmt.Fprintf(&sb, "%s\n", sYellow.Render("Note: Root CA not included in server response (normal for TLS)."))
 	}
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
+	renderChainStructureSection(&sb, r.Ordered, width)
+	renderCertBlocksSection(&sb, r.Statuses, r.Ordered, width)
+	renderSigSection(&sb, r.SignatureErr, width)
+	renderOrderSection(&sb, "Server-Presented Order", "Physical order from server", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 
-	fmt.Fprintf(&sb, "%s\n", label("Chain Structure"))
-	sb.WriteString(renderChainTree(r.Ordered))
-	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
-
-	for idx, s := range r.Statuses {
-		sb.WriteString(renderCertBlock(s.Cert, s, r.Ordered, idx))
-		sb.WriteString("\n")
-	}
-	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
-
-	sb.WriteString(renderSignatureVerification(r.SignatureErr))
-	fmt.Fprintf(&sb, "\n%s\n\n", sepDash(width))
-
-	fmt.Fprintf(&sb, "%s\n", label("Server-Presented Order"))
-	sb.WriteString("  Expected (Leaf → Root):\n")
-	for idx, cert := range r.Ordered {
-		role := getCertRoleName(idx, len(r.Ordered), cert.IsSelfSigned, cert.Cert.IsCA)
-		fmt.Fprintf(&sb, "    %d. %s (%s)\n", idx+1, sBold.Render(cert.SubjectCN), role)
-	}
-	sb.WriteString("\n  Physical order from server:\n")
-	for idx, e := range r.Order.Physical {
-		var roleDisp string
-		if e.LogicalIndex != -1 {
-			roleDisp = "(" + e.Role + ")"
-		} else {
-			roleDisp = sFail.Render("(unrelated)")
-		}
-		fmt.Fprintf(&sb, "    %d. %s %s\n", idx+1, sBold.Render(e.Cert.SubjectCN), roleDisp)
-	}
-	if r.Order.Correct {
-		fmt.Fprintf(&sb, "\n  %s — order is correct.\n", sPass.Render("PASS"))
-	} else {
-		fmt.Fprintf(&sb, "\n  %s — order is incorrect.\n", sFail.Render("FAIL"))
-		for _, reason := range r.Order.Reasons {
-			fmt.Fprintf(&sb, "  · %s\n", reason)
-		}
-	}
-
-	fmt.Fprintf(&sb, "\n%s\n", sepEq(width))
+	var footerNotes []string
 	if !r.RootPresent {
-		fmt.Fprintf(&sb, "%s\n", sYellow.Render("Note: Root CA absent from server chain (validated against presented intermediates only)."))
+		footerNotes = append(footerNotes, sYellow.Render("Note: Root CA absent from server chain (validated against presented intermediates only)."))
 	}
-	if r.Passed {
-		fmt.Fprintf(&sb, "%s\n", sPass.Render("SUCCESS: certificates are valid, properly ordered, and cryptographically sound."))
-	} else {
-		fmt.Fprintf(&sb, "%s\n", sFail.Render("FAILURE: TLS certificate check failed."))
-		fmt.Fprintf(&sb, "Reasons: %s\n", strings.Join(r.FailReasons, "; "))
-	}
+	renderPassFail(&sb, r.Passed,
+		"SUCCESS: certificates are valid, properly ordered, and cryptographically sound.",
+		"FAILURE: TLS certificate check failed.",
+		r.FailReasons, width, footerNotes...)
 	return sb.String()
 }
 
 func renderShowResult(r *ShowResult, width int) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", sCyan.Bold(true).Render("Certificate Inspector"))
-	fmt.Fprintf(&sb, "%s\n", sDim.Render("File: "+r.Path))
-	fmt.Fprintf(&sb, "%s\n\n", sepEq(width))
+	renderPageHeader(&sb, "Certificate Inspector", []string{"File: " + r.Path}, width)
 	fmt.Fprintf(&sb, "Found %d certificate(s).\n", len(r.Certs))
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
 
@@ -336,41 +324,12 @@ func renderShowResult(r *ShowResult, width int) string {
 			role = "Leaf (Self-Signed, No CA)"
 		}
 
+		notYetActive := now.Before(cert.Cert.NotBefore.UTC())
+		expired := now.After(cert.Cert.NotAfter.UTC())
+		daysLeft := int(cert.Cert.NotAfter.UTC().Sub(now).Hours() / 24)
+
 		fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", cert.Index, role)))
-		sb.WriteString(certField("Subject CN", sBold.Render(cert.SubjectCN)))
-		sb.WriteString(certField("Subject DN", cert.SubjectDN))
-		sb.WriteString(certField("Issuer CN", cert.IssuerCN))
-		sb.WriteString(certField("Issuer DN", cert.IssuerDN))
-		sb.WriteString(certField("Serial", cert.Serial))
-		sb.WriteString(certField("Validity", cert.NotBeforeStr+" → "+cert.NotAfterStr))
-
-		switch {
-		case now.Before(cert.Cert.NotBefore.UTC()):
-			activates := cert.Cert.NotBefore.UTC().Sub(now).Round(time.Second)
-			sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("NOT YET ACTIVE (activates in %s)", activates))))
-		case now.After(cert.Cert.NotAfter.UTC()):
-			ago := now.Sub(cert.Cert.NotAfter.UTC()).Round(time.Second)
-			sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("EXPIRED (%s ago)", ago))))
-		default:
-			days := int(cert.Cert.NotAfter.UTC().Sub(now).Hours() / 24)
-			sb.WriteString(certField("Status", sPass.Render(fmt.Sprintf("ACTIVE (%d days remaining)", days))))
-		}
-
-		if cert.Skid != "" {
-			sb.WriteString(certField("SKID", cert.Skid))
-		}
-		if cert.Akid != "" {
-			sb.WriteString(certField("AKID", cert.Akid))
-		}
-		if len(cert.KeyUsages) > 0 {
-			sb.WriteString(certField("Key Usage", strings.Join(cert.KeyUsages, ", ")))
-		}
-		if len(cert.ExtKeyUsages) > 0 {
-			sb.WriteString(certField("Ext Key Use", strings.Join(cert.ExtKeyUsages, ", ")))
-		}
-		for _, issue := range cert.ComplianceIssues {
-			fmt.Fprintf(&sb, "%s\n", sFail.Render("RFC Violation: "+issue))
-		}
+		renderCertCommonFields(&sb, cert, notYetActive, expired, daysLeft)
 		sb.WriteString("\n")
 	}
 
@@ -382,10 +341,7 @@ func renderDiffResult(r *DiffResult, width int) string {
 	colWidth := max((width-8)/2, 20)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", sCyan.Bold(true).Render("Certificate Chain Comparison"))
-	fmt.Fprintf(&sb, "%s\n", sDim.Render("Old: "+r.FileOld))
-	fmt.Fprintf(&sb, "%s\n", sDim.Render("New: "+r.FileNew))
-	fmt.Fprintf(&sb, "%s\n\n", sepEq(width))
+	renderPageHeader(&sb, "Certificate Chain Comparison", []string{"Old: " + r.FileOld, "New: " + r.FileNew}, width)
 
 	fmt.Fprintf(&sb, "Old file: %d cert(s), chain depth %d\n", len(r.ParsedOld), len(r.OrderedOld))
 	fmt.Fprintf(&sb, "New file: %d cert(s), chain depth %d\n", len(r.ParsedNew), len(r.OrderedNew))
@@ -435,12 +391,37 @@ func PrintCheckResult(r *CheckResult) {
 	display(func(w int) string { return renderCheckResult(r, w) })
 }
 
-// PrintShowResult renders the result of a Show call to stdout (or the pager).
 func PrintShowResult(r *ShowResult) {
 	display(func(w int) string { return renderShowResult(r, w) })
 }
 
-// PrintDiffResult renders the result of a Diff call to stdout (or the pager).
 func PrintDiffResult(r *DiffResult) {
 	display(func(w int) string { return renderDiffResult(r, w) })
+}
+
+func renderMatchResult(r *MatchResult, width int) string {
+	var sb strings.Builder
+	renderPageHeader(&sb, "Certificate Key Match", []string{"Cert: " + r.CertPath, "Key:  " + r.KeyPath}, width)
+
+	sb.WriteString(certField("Subject CN", sBold.Render(r.CertSubject)))
+	sb.WriteString(certField("Key Type", r.KeyType))
+
+	if r.Matched {
+		sb.WriteString(certField("Public Key", r.CertPubKey))
+	} else {
+		sb.WriteString(certField("Cert Key", r.CertPubKey))
+		sb.WriteString(certField("File Key", r.KeyPubKey))
+	}
+
+	fmt.Fprintf(&sb, "\n%s\n", sepEq(width))
+	if r.Matched {
+		fmt.Fprintf(&sb, "%s\n", sPass.Render("MATCH: certificate and key correspond."))
+	} else {
+		fmt.Fprintf(&sb, "%s\n", sFail.Render("MISMATCH: certificate and key do not correspond."))
+	}
+	return sb.String()
+}
+
+func PrintMatchResult(r *MatchResult) {
+	display(func(w int) string { return renderMatchResult(r, w) })
 }
