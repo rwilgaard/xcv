@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/spf13/cobra"
 
 	"github.com/rwilgaard/xcv/internal/xcv"
@@ -18,15 +20,10 @@ func main() {
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if xcv.NoColor {
-				xcv.Green, xcv.Red, xcv.Yellow, xcv.Cyan, xcv.Bold, xcv.Reset = "", "", "", "", "", ""
-			}
-			return nil
-		},
 	}
 
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoColor, "no-color", false, "Strip ANSI color codes from output")
+	rootCmd.PersistentFlags().BoolVar(&xcv.NoPager, "no-pager", false, "Print directly to stdout instead of opening a pager")
 	rootCmd.PersistentFlags().BoolVar(&xcv.Quiet, "quiet", false, "Suppress all output; rely on exit codes only")
 
 	rootCmd.AddCommand(newCheckCmd(), newInspectCmd(), newValidateCmd(), newCompareCmd())
@@ -37,8 +34,14 @@ func main() {
 	}
 }
 
+var errStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
+
 func printErr(msg string) {
-	fmt.Fprintf(os.Stderr, "%s%sError:%s %s\n", xcv.Red, xcv.Bold, xcv.Reset, msg)
+	prefix := "Error:"
+	if !xcv.NoColor {
+		prefix = errStyle.Render(prefix)
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", prefix, msg)
 }
 
 func newCheckCmd() *cobra.Command {
@@ -117,14 +120,13 @@ cryptographic signatures, chain completeness, and physical PEM ordering.`,
 
 func newCompareCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "compare <new_file> <old_file>",
-		Short: "Compare two PEM certificate chain files",
-		Long: `Compare two PEM certificate chain files. Passes when only the leaf
-certificate has changed (a clean renewal), or when chains are identical.`,
+		Use:          "compare <old_file> <new_file>",
+		Short:        "Compare two PEM certificate chain files",
+		Long:         `Compare two PEM certificate chain files side-by-side (old on left, new on right).`,
 		Args:         cobra.ExactArgs(2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Compare(args[0], args[1])
+			r, err := xcv.Compare(args[1], args[0])
 			if err != nil {
 				return err
 			}

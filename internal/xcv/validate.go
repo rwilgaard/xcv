@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// Validate parses the PEM file at path, reconstructs the certificate chain,
-// and returns a fully-populated ValidationResult. Returns error only on I/O
-// or parse failure.
 func Validate(path string) (*ValidationResult, error) {
 	certs, pems, err := parseCertsFromFile(path)
 	if err != nil {
@@ -59,9 +56,6 @@ func Validate(path string) (*ValidationResult, error) {
 	}, nil
 }
 
-// Check connects to host:port over TLS, retrieves the presented certificate
-// chain, and validates expiry, signatures, and server-sent order. Root absence
-// is treated as informational — servers normally omit the root.
 func Check(host string, port int) (*CheckResult, error) {
 	rawCerts, pems, err := fetchCertsFromTLS(host, port)
 	if err != nil {
@@ -105,8 +99,6 @@ func Check(host string, port int) (*CheckResult, error) {
 	}, nil
 }
 
-// Inspect parses the PEM file at path and returns raw cert details with no
-// chain validation — no ordering, no signature checks, no completeness check.
 func Inspect(path string) (*InspectResult, error) {
 	certs, pems, err := parseCertsFromFile(path)
 	if err != nil {
@@ -121,8 +113,6 @@ func Inspect(path string) (*InspectResult, error) {
 	}, nil
 }
 
-// ParseHostPort extracts host and port from user input.
-// Accepts: example.com, example.com:8443, https://example.com, https://example.com:8443
 func ParseHostPort(input string, defaultPort int) (string, int, error) {
 	input = strings.TrimPrefix(input, "https://")
 	input = strings.TrimPrefix(input, "http://")
@@ -229,8 +219,6 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 	return result
 }
 
-// Compare parses two PEM files and returns a ComparisonResult describing
-// how the certificate chains differ.
 func Compare(fileNew, fileOld string) (*ComparisonResult, error) {
 	certsNew, pemsNew, err := parseCertsFromFile(fileNew)
 	if err != nil {
