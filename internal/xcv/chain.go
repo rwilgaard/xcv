@@ -2,6 +2,8 @@ package xcv
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
@@ -9,13 +11,18 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"slices"
+	"time"
 )
 
 var oidKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 15}
 
-const certTimeFormat = "Jan _2 15:04:05 2006 MST"
+const (
+	certTimeFormat = "Jan _2 15:04:05 2006 MST"
+	tlsDialTimeout = 10 * time.Second
+)
 
 func formatSerial(serial *big.Int) string {
 	if serial == nil {
@@ -54,6 +61,10 @@ func complianceIssues(cert *x509.Certificate) []string {
 
 	if cert.IsCA && !cert.BasicConstraintsValid {
 		issues = append(issues, "CA certificate missing BasicConstraints extension (RFC 5280 §4.2.1.9)")
+	}
+
+	if cert.IsCA && cert.KeyUsage != 0 && cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		issues = append(issues, "CA certificate without Certificate Sign key usage (RFC 5280 §4.2.1.3)")
 	}
 
 	if cert.KeyUsage != 0 {
@@ -119,6 +130,7 @@ func extKeyUsageStrings(ekus []x509.ExtKeyUsage) []string {
 }
 
 func newCertDetails(cert *x509.Certificate, rawPEM string, index int) *CertDetails {
+	sum := sha256.Sum256(cert.Raw)
 	return &CertDetails{
 		Index:            index,
 		Cert:             cert,
@@ -136,15 +148,23 @@ func newCertDetails(cert *x509.Certificate, rawPEM string, index int) *CertDetai
 		ComplianceIssues: complianceIssues(cert),
 		IsSelfSigned:     isSelfSigned(cert),
 		RawPEM:           rawPEM,
+		Fingerprint:      hex.EncodeToString(sum[:]),
 	}
 }
 
-func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, error) {
+func fetchCertsFromTLS(ctx context.Context, host string, port int) ([]*x509.Certificate, []string, error) {
+	ctx, cancel := context.WithTimeout(ctx, tlsDialTimeout)
+	defer cancel()
+
 	addr := fmt.Sprintf("%s:%d", host, port)
-	conn, err := tls.Dial("tcp", addr, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // intentional: we analyse the cert, not trust it
-		ServerName:         host,
-	})
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: tlsDialTimeout},
+		Config: &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // intentional: we analyse the cert, not trust it
+			ServerName:         host,
+		},
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("TLS connection to %s failed: %w", addr, err)
 	}
@@ -152,7 +172,7 @@ func fetchCertsFromTLS(host string, port int) ([]*x509.Certificate, []string, er
 		_ = conn.Close()
 	}()
 
-	raw := conn.ConnectionState().PeerCertificates
+	raw := conn.(*tls.Conn).ConnectionState().PeerCertificates
 	pems := make([]string, len(raw))
 	for i, c := range raw {
 		pems[i] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}))

@@ -58,10 +58,10 @@ func renderCertCommonFields(sb *strings.Builder, c *CertDetails, notYetActive, e
 	sb.WriteString(certField("Validity", c.NotBeforeStr+" → "+c.NotAfterStr))
 	switch {
 	case notYetActive:
-		activates := c.Cert.NotBefore.UTC().Sub(time.Now().UTC()).Round(time.Second)
+		activates := time.Until(c.Cert.NotBefore).Round(time.Second)
 		sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("NOT YET ACTIVE (activates in %s)", activates))))
 	case expired:
-		ago := time.Now().UTC().Sub(c.Cert.NotAfter.UTC()).Round(time.Second)
+		ago := time.Since(c.Cert.NotAfter).Round(time.Second)
 		sb.WriteString(certField("Status", sFail.Render(fmt.Sprintf("EXPIRED (%s ago)", ago))))
 	default:
 		sb.WriteString(certField("Status", sPass.Render(fmt.Sprintf("ACTIVE (%d days remaining)", daysLeft))))
@@ -89,9 +89,9 @@ func renderChainStructureSection(sb *strings.Builder, ordered []*CertDetails, wi
 	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
 }
 
-func renderCertBlocksSection(sb *strings.Builder, statuses []CertStatus, ordered []*CertDetails, width int) {
+func renderCertBlocksSection(sb *strings.Builder, statuses []CertStatus, width int) {
 	for idx, s := range statuses {
-		sb.WriteString(renderCertBlock(s.Cert, s, ordered, idx))
+		sb.WriteString(renderCertBlock(s.Cert, s, idx))
 		sb.WriteString("\n")
 	}
 	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
@@ -142,7 +142,7 @@ func renderOrderSection(sb *strings.Builder, sectionLabel, physicalLabel string,
 	}
 }
 
-func renderCertBlock(c *CertDetails, s CertStatus, ordered []*CertDetails, idx int) string {
+func renderCertBlock(c *CertDetails, s CertStatus, idx int) string {
 	var sb strings.Builder
 
 	roleColor := sYellow
@@ -155,12 +155,6 @@ func renderCertBlock(c *CertDetails, s CertStatus, ordered []*CertDetails, idx i
 
 	fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", idx+1, s.Role)))
 	renderCertCommonFields(&sb, c, s.NotYetActive, s.Expired, s.DaysLeft)
-	if s.AkidMismatch && idx < len(ordered)-1 {
-		parent := ordered[idx+1]
-		fmt.Fprintf(&sb, "%s\n", sWarn.Render("Warning: AKID mismatch with parent SKID"))
-		sb.WriteString(certField("  This AKID", c.Akid))
-		sb.WriteString(certField("  Parent SKID", parent.Skid))
-	}
 
 	return sb.String()
 }
@@ -213,6 +207,18 @@ func renderSignatureVerification(err error) string {
 		fmt.Fprintf(&sb, "  Detail: %v\n", err)
 	}
 	return sb.String()
+}
+
+func renderHostnameSection(sb *strings.Builder, host string, err error, width int) {
+	fmt.Fprintf(sb, "%s\n", label("Hostname Verification"))
+	if err == nil {
+		fmt.Fprintf(sb, "  Result: %s\n", sPass.Render("PASS"))
+		fmt.Fprintf(sb, "  Detail: Leaf certificate is valid for %s.\n", host)
+	} else {
+		fmt.Fprintf(sb, "  Result: %s\n", sFail.Render("FAIL"))
+		fmt.Fprintf(sb, "  Detail: %v\n", err)
+	}
+	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
 }
 
 func renderComparePanels(p PositionResult, colWidth int) string {
@@ -269,7 +275,7 @@ func renderValidationResult(r *ValidationResult, width int) string {
 	fmt.Fprintf(&sb, "Found %d certificate(s) in the file.\n", len(r.ParsedCerts))
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
 	renderChainStructureSection(&sb, r.Ordered, width)
-	renderCertBlocksSection(&sb, r.Statuses, r.Ordered, width)
+	renderCertBlocksSection(&sb, r.Statuses, width)
 	renderSigSection(&sb, r.SignatureErr, width)
 	renderOrderSection(&sb, "PEM File Order", "Physical order in file", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 	renderPassFail(&sb, r.Passed,
@@ -288,8 +294,9 @@ func renderCheckResult(r *CheckResult, width int) string {
 	}
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
 	renderChainStructureSection(&sb, r.Ordered, width)
-	renderCertBlocksSection(&sb, r.Statuses, r.Ordered, width)
+	renderCertBlocksSection(&sb, r.Statuses, width)
 	renderSigSection(&sb, r.SignatureErr, width)
+	renderHostnameSection(&sb, r.Host, r.HostnameErr, width)
 	renderOrderSection(&sb, "Server-Presented Order", "Physical order from server", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 
 	var footerNotes []string
@@ -324,9 +331,7 @@ func renderShowResult(r *ShowResult, width int) string {
 			role = "Leaf (Self-Signed, No CA)"
 		}
 
-		notYetActive := now.Before(cert.Cert.NotBefore.UTC())
-		expired := now.After(cert.Cert.NotAfter.UTC())
-		daysLeft := int(cert.Cert.NotAfter.UTC().Sub(now).Hours() / 24)
+		notYetActive, expired, daysLeft := certTimeStatus(cert.Cert, now)
 
 		fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", cert.Index, role)))
 		renderCertCommonFields(&sb, cert, notYetActive, expired, daysLeft)

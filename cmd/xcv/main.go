@@ -50,7 +50,7 @@ func newCheckCmd() *cobra.Command {
 		Use:   "check <host[:port]>",
 		Short: "Fetch and validate TLS certificates from a live host",
 		Long: `Connect to a host over TLS, retrieve the presented certificate chain,
-and validate expiry, cryptographic signatures, and chain order.
+and validate expiry, cryptographic signatures, hostname match, and chain order.
 Root CA absence is treated as informational — servers normally omit the root.
 
 Accepts: example.com, example.com:8443, https://example.com`,
@@ -61,7 +61,7 @@ Accepts: example.com, example.com:8443, https://example.com`,
 			if err != nil {
 				return err
 			}
-			r, err := xcv.Check(host, p)
+			r, err := xcv.Check(cmd.Context(), host, p)
 			if err != nil {
 				return err
 			}
@@ -126,7 +126,7 @@ func newDiffCmd() *cobra.Command {
 		Args:         cobra.ExactArgs(2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Diff(args[1], args[0])
+			r, err := xcv.Diff(args[0], args[1])
 			if err != nil {
 				return err
 			}
