@@ -19,6 +19,7 @@ type CertDetails struct {
 	ComplianceIssues []string
 	IsSelfSigned     bool
 	RawPEM           string
+	Fingerprint      string // hex SHA-256 of the DER-encoded certificate
 }
 
 type CertStatus struct {
@@ -28,7 +29,6 @@ type CertStatus struct {
 	NotYetActive bool
 	Expired      bool
 	DaysLeft     int
-	AkidMismatch bool
 }
 
 type PhysicalEntry struct {
@@ -82,6 +82,7 @@ type CheckResult struct {
 	Ordered      []*CertDetails
 	Statuses     []CertStatus
 	SignatureErr error
+	HostnameErr  error
 	Order        OrderCheckResult
 	RootPresent  bool
 	Passed       bool

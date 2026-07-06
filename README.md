@@ -63,7 +63,7 @@ xcv check https://example.com
 xcv check example.com --port 8443
 ```
 
-Checks expiry, signatures, and the order the server presented. Missing root CA is informational — servers normally don't send it.
+Checks expiry, signatures, hostname match, and the order the server presented. Missing root CA is informational — servers normally don't send it. Connections time out after 10 seconds.
 
 ---
 

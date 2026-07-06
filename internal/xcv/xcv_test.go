@@ -58,6 +58,31 @@ func makeCert(t *testing.T, cn string, isCA bool, parent *x509.Certificate, pare
 	return cert, key
 }
 
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	os.Stdout = pw
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	if err := pw.Close(); err != nil {
+		t.Errorf("close write pipe: %v", err)
+	}
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(pr); err != nil {
+		t.Fatalf("read from pipe: %v", err)
+	}
+	return buf.String()
+}
+
 // writePEM writes a slice of certs as a PEM bundle to a temp file, returning its path.
 func writePEM(t *testing.T, certs []*x509.Certificate) string {
 	t.Helper()
@@ -171,26 +196,13 @@ func TestQuietSuppressesOutput(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 
-	// Capture stdout
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-
-	Quiet = true
-	PrintValidationResult(r)
-	Quiet = false
-
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	if buf.Len() != 0 {
-		t.Errorf("Quiet=true: expected no output, got %d bytes", buf.Len())
+	output := captureStdout(t, func() {
+		Quiet = true
+		PrintValidationResult(r)
+		Quiet = false
+	})
+	if output != "" {
+		t.Errorf("Quiet=true: expected no output, got %d bytes", len(output))
 	}
 }
 
@@ -212,20 +224,7 @@ func TestNoColorStripsANSI(t *testing.T) {
 	NoColor = true
 	defer func() { NoColor = false }()
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	PrintValidationResult(r)
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	output := buf.String()
+	output := captureStdout(t, func() { PrintValidationResult(r) })
 	if strings.Contains(output, "\033[") {
 		t.Errorf("no-color: output still contains ANSI escape codes")
 	}
@@ -308,20 +307,7 @@ func TestPrintShowResult(t *testing.T) {
 		t.Fatalf("Show: %v", err)
 	}
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	PrintShowResult(r)
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	output := buf.String()
+	output := captureStdout(t, func() { PrintShowResult(r) })
 	for _, want := range []string{"Certificate Inspector", "Root CA", "Leaf"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
@@ -337,23 +323,13 @@ func TestPrintShowResult_Quiet(t *testing.T) {
 		t.Fatalf("Show: %v", err)
 	}
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	Quiet = true
-	PrintShowResult(r)
-	Quiet = false
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	if buf.Len() != 0 {
-		t.Errorf("Quiet=true: expected no output, got %d bytes", buf.Len())
+	output := captureStdout(t, func() {
+		Quiet = true
+		PrintShowResult(r)
+		Quiet = false
+	})
+	if output != "" {
+		t.Errorf("Quiet=true: expected no output, got %d bytes", len(output))
 	}
 }
 
@@ -364,25 +340,12 @@ func TestPrintDiffResult(t *testing.T) {
 
 	fileNew := writePEM(t, []*x509.Certificate{leaf2, root})
 	fileOld := writePEM(t, []*x509.Certificate{leaf1, root})
-	r, err := Diff(fileNew, fileOld)
+	r, err := Diff(fileOld, fileNew)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	PrintDiffResult(r)
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	output := buf.String()
+	output := captureStdout(t, func() { PrintDiffResult(r) })
 	for _, want := range []string{"Certificate Chain Comparison", "Summary", "differ"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
@@ -417,20 +380,7 @@ func TestPrintCheckResult(t *testing.T) {
 		Passed:       true,
 	}
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	PrintCheckResult(r)
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	output := buf.String()
+	output := captureStdout(t, func() { PrintCheckResult(r) })
 	for _, want := range []string{"TLS Certificate Check", "example.com:443", "SUCCESS"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
@@ -478,7 +428,7 @@ func TestDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fileNew := writePEM(t, tc.newCerts)
 			fileOld := writePEM(t, tc.oldCerts)
-			r, err := Diff(fileNew, fileOld)
+			r, err := Diff(fileOld, fileNew)
 			if err != nil {
 				t.Fatalf("Diff returned error: %v", err)
 			}
@@ -627,20 +577,7 @@ func TestPrintMatchResult(t *testing.T) {
 		t.Fatalf("Match: %v", err)
 	}
 
-	old := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-	PrintMatchResult(r)
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	output := buf.String()
+	output := captureStdout(t, func() { PrintMatchResult(r) })
 	for _, want := range []string{"Certificate Key Match", "example.com", "MATCH"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
@@ -690,6 +627,9 @@ func TestParseHostPort(t *testing.T) {
 		{"https://example.com:8443", 443, "example.com", 8443, false},
 		{"https://example.com/some/path", 443, "example.com", 443, false},
 		{"http://example.com", 80, "example.com", 80, false},
+		{"example.com:abc", 443, "", 0, true},
+		{"example.com:0", 443, "", 0, true},
+		{"example.com:99999", 443, "", 0, true},
 	}
 
 	for _, tc := range tests {
@@ -711,6 +651,76 @@ func TestParseHostPort(t *testing.T) {
 				t.Errorf("port = %d, want %d", port, tc.wantPort)
 			}
 		})
+	}
+}
+
+// makeSANCert creates a self-signed cert with an empty subject and the given DNS names.
+func makeSANCert(t *testing.T, dnsNames []string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: nextSerial(),
+		DNSNames:     dnsNames,
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return cert
+}
+
+func TestComputePositions_SANOnly(t *testing.T) {
+	a := makeSANCert(t, []string{"example.com"})
+	b := makeSANCert(t, []string{"example.com"})
+	c := makeSANCert(t, []string{"other.com"})
+
+	details := func(cert *x509.Certificate) []*CertDetails {
+		return buildCertDetails([]*x509.Certificate{cert}, []string{""})
+	}
+
+	renewed := computePositions(details(b), details(a))
+	if renewed[0].Status != StatusRenewed {
+		t.Errorf("same SANs, different serial: status = %v, want StatusRenewed", renewed[0].Status)
+	}
+
+	different := computePositions(details(c), details(a))
+	if different[0].Status != StatusDifferent {
+		t.Errorf("different SANs: status = %v, want StatusDifferent", different[0].Status)
+	}
+}
+
+func TestMatch_EncryptedKey(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, _ := makeCert(t, "example.com", false, root, rootKey)
+	certPEM := writePEM(t, []*x509.Certificate{leaf})
+
+	f, err := os.CreateTemp(t.TempDir(), "*.key.pem")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	block := &pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: []byte("not-a-real-key")}
+	if err := pem.Encode(f, block); err != nil {
+		t.Fatalf("encode pem: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	_, err = Match(certPEM, f.Name())
+	if err == nil {
+		t.Fatal("expected error for encrypted key, got nil")
+	}
+	if !strings.Contains(err.Error(), "encrypted") {
+		t.Errorf("error should mention encryption, got: %v", err)
 	}
 }
 

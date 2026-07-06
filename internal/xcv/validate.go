@@ -1,6 +1,7 @@
 package xcv
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -64,8 +66,8 @@ func Validate(path string) (*ValidationResult, error) {
 	}, nil
 }
 
-func Check(host string, port int) (*CheckResult, error) {
-	rawCerts, pems, err := fetchCertsFromTLS(host, port)
+func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
+	rawCerts, pems, err := fetchCertsFromTLS(ctx, host, port)
 	if err != nil {
 		return nil, err
 	}
@@ -79,15 +81,23 @@ func Check(host string, port int) (*CheckResult, error) {
 	sigErr := verifySignaturesDetails(ordered)
 	orderCheck := computeOrderCheck(parsed, ordered)
 
+	var hostnameErr error
+	if len(ordered) > 0 {
+		hostnameErr = ordered[0].Cert.VerifyHostname(host)
+	}
+
 	rootPresent := len(ordered) > 0 && ordered[len(ordered)-1].IsSelfSigned && ordered[len(ordered)-1].Cert.IsCA
 
-	passed := datesOK && sigErr == nil && orderCheck.Correct
+	passed := datesOK && sigErr == nil && orderCheck.Correct && hostnameErr == nil
 	var failReasons []string
 	if !datesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
 	}
 	if sigErr != nil {
 		failReasons = append(failReasons, "cryptographic signature verification failed")
+	}
+	if hostnameErr != nil {
+		failReasons = append(failReasons, fmt.Sprintf("certificate is not valid for %s", host))
 	}
 	if !orderCheck.Correct {
 		failReasons = append(failReasons, "certificates were presented in incorrect order by the server")
@@ -100,6 +110,7 @@ func Check(host string, port int) (*CheckResult, error) {
 		Ordered:      ordered,
 		Statuses:     statuses,
 		SignatureErr: sigErr,
+		HostnameErr:  hostnameErr,
 		Order:        orderCheck,
 		RootPresent:  rootPresent,
 		Passed:       passed,
@@ -202,10 +213,24 @@ func ParseHostPort(input string, defaultPort int) (string, int, error) {
 		return input, defaultPort, nil
 	}
 	portNum, err := strconv.Atoi(p)
-	if err != nil {
+	if err != nil || portNum < 1 || portNum > 65535 {
 		return "", 0, fmt.Errorf("invalid port %q", p)
 	}
 	return h, portNum, nil
+}
+
+// certTimeStatus classifies a certificate's validity window relative to now.
+// daysLeft is meaningful only when the certificate is currently active.
+func certTimeStatus(cert *x509.Certificate, now time.Time) (notYetActive, expired bool, daysLeft int) {
+	switch {
+	case now.Before(cert.NotBefore):
+		notYetActive = true
+	case now.After(cert.NotAfter):
+		expired = true
+	default:
+		daysLeft = int(cert.NotAfter.Sub(now).Hours() / 24)
+	}
+	return notYetActive, expired, daysLeft
 }
 
 func computeCertStatuses(ordered []*CertDetails) []CertStatus {
@@ -213,31 +238,12 @@ func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 	statuses := make([]CertStatus, len(ordered))
 
 	for idx, cert := range ordered {
-		notBefore := cert.Cert.NotBefore.UTC()
-		notAfter := cert.Cert.NotAfter.UTC()
-
 		s := CertStatus{
 			Cert: cert,
 			Role: getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA),
 		}
-
-		switch {
-		case now.Before(notBefore):
-			s.NotYetActive = true
-		case now.After(notAfter):
-			s.Expired = true
-		default:
-			s.Active = true
-			s.DaysLeft = int(notAfter.Sub(now).Hours() / 24)
-		}
-
-		if idx < len(ordered)-1 {
-			parent := ordered[idx+1]
-			if cert.Akid != "" && parent.Skid != "" && cert.Akid != parent.Skid {
-				s.AkidMismatch = true
-			}
-		}
-
+		s.NotYetActive, s.Expired, s.DaysLeft = certTimeStatus(cert.Cert, now)
+		s.Active = !s.NotYetActive && !s.Expired
 		statuses[idx] = s
 	}
 
@@ -247,14 +253,14 @@ func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 	orderedIdx := make(map[string]int, len(ordered))
 	for oIdx, c := range ordered {
-		orderedIdx[c.Serial+"|"+c.SubjectDN] = oIdx
+		orderedIdx[c.Fingerprint] = oIdx
 	}
 
 	physical := make([]PhysicalEntry, len(parsedCerts))
 	result := OrderCheckResult{Correct: true}
 
 	for idx, cert := range parsedCerts {
-		logicalIdx, ok := orderedIdx[cert.Serial+"|"+cert.SubjectDN]
+		logicalIdx, ok := orderedIdx[cert.Fingerprint]
 		entry := PhysicalEntry{Cert: cert, LogicalIndex: -1}
 		if ok {
 			entry.LogicalIndex = logicalIdx
@@ -283,7 +289,7 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 	} else {
 		for idx, cert := range ordered {
 			phys := parsedCerts[idx]
-			if cert.Serial != phys.Serial || cert.SubjectDN != phys.SubjectDN {
+			if cert.Fingerprint != phys.Fingerprint {
 				result.Correct = false
 				expectedRole := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
 				result.Reasons = append(result.Reasons, fmt.Sprintf(
@@ -298,21 +304,21 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 }
 
 // Diff compares two PEM certificate chain files and returns their position-by-position comparison.
-func Diff(fileNew, fileOld string) (*DiffResult, error) {
-	certsNew, pemsNew, err := parseCertsFromFile(fileNew)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read/parse %s: %w", fileNew, err)
-	}
-	if len(certsNew) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in %s", fileNew)
-	}
-
+func Diff(fileOld, fileNew string) (*DiffResult, error) {
 	certsOld, pemsOld, err := parseCertsFromFile(fileOld)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read/parse %s: %w", fileOld, err)
 	}
 	if len(certsOld) == 0 {
 		return nil, fmt.Errorf("no certificate blocks found in %s", fileOld)
+	}
+
+	certsNew, pemsNew, err := parseCertsFromFile(fileNew)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read/parse %s: %w", fileNew, err)
+	}
+	if len(certsNew) == 0 {
+		return nil, fmt.Errorf("no certificate blocks found in %s", fileNew)
 	}
 
 	parsedNew := buildCertDetails(certsNew, pemsNew)
@@ -352,11 +358,12 @@ func computePositions(orderedNew, orderedOld []*CertDetails) []PositionResult {
 
 		switch {
 		case certNew != nil && certOld != nil:
-			if certNew.Serial == certOld.Serial {
+			switch {
+			case certNew.Fingerprint == certOld.Fingerprint:
 				p.Status = StatusIdentical
-			} else if certNew.SubjectCN == certOld.SubjectCN {
+			case sameSubjectIdentity(certNew, certOld):
 				p.Status = StatusRenewed
-			} else {
+			default:
 				p.Status = StatusDifferent
 			}
 		case certNew != nil:
@@ -371,6 +378,21 @@ func computePositions(orderedNew, orderedOld []*CertDetails) []PositionResult {
 	return positions
 }
 
+// sameSubjectIdentity reports whether two certificates name the same subject.
+// SAN-only certificates (empty subject DN) are compared by their DNS names.
+func sameSubjectIdentity(a, b *CertDetails) bool {
+	if a.SubjectDN != "" || b.SubjectDN != "" {
+		return a.SubjectDN == b.SubjectDN
+	}
+	return slices.Equal(sortedDNSNames(a), sortedDNSNames(b))
+}
+
+func sortedDNSNames(c *CertDetails) []string {
+	names := slices.Clone(c.Cert.DNSNames)
+	slices.Sort(names)
+	return names
+}
+
 func classifyPEM(data []byte) (hasCert, hasKey bool) {
 	for {
 		block, rest := pem.Decode(data)
@@ -380,7 +402,7 @@ func classifyPEM(data []byte) (hasCert, hasKey bool) {
 		switch block.Type {
 		case "CERTIFICATE":
 			hasCert = true
-		case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY":
+		case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY":
 			hasKey = true
 		}
 		if hasCert && hasKey {
@@ -397,6 +419,9 @@ func extractPublicKeyFromPEM(data []byte) (crypto.PublicKey, string, error) {
 			break
 		}
 		data = rest
+		if strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") || block.Type == "ENCRYPTED PRIVATE KEY" {
+			return nil, "", fmt.Errorf("encrypted private keys are not supported; decrypt first (openssl pkey -in key.pem)")
+		}
 		switch block.Type {
 		case "PRIVATE KEY":
 			key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
