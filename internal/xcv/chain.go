@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -204,8 +205,20 @@ func parseCertsFromBytes(data []byte) ([]*x509.Certificate, []string, error) {
 	return certs, pems, nil
 }
 
+// readInput reads the file at path, or stdin when path is "-".
+func readInput(path string) ([]byte, error) {
+	if path == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read stdin: %w", err)
+		}
+		return data, nil
+	}
+	return os.ReadFile(path)
+}
+
 func parseCertsFromFile(path string) ([]*x509.Certificate, []string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readInput(path)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -77,6 +77,12 @@ xcv validate cert_chain.pem
 
 Checks the chain is complete, signatures are valid, nothing is expired, certs are in the right order, and RFC 5280 is satisfied.
 
+Read from stdin with `-`, or pipe directly into `validate`/`show`:
+
+```bash
+kubectl get secret tls -o jsonpath='{.data.tls\.crt}' | base64 -d | xcv validate
+```
+
 ---
 
 ### 3. Certificate Inspection
