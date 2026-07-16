@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -31,7 +32,7 @@ func formatSerial(serial *big.Int) string {
 	return fmt.Sprintf("%X", serial)
 }
 
-func formatKeyId(id []byte) string {
+func formatKeyID(id []byte) string {
 	if len(id) == 0 {
 		return ""
 	}
@@ -79,23 +80,39 @@ func complianceIssues(cert *x509.Certificate) []string {
 	return issues
 }
 
+var keyUsageBits = []struct {
+	bit  x509.KeyUsage
+	name string
+}{
+	{x509.KeyUsageDigitalSignature, "Digital Signature"},
+	{x509.KeyUsageContentCommitment, "Content Commitment"},
+	{x509.KeyUsageKeyEncipherment, "Key Encipherment"},
+	{x509.KeyUsageDataEncipherment, "Data Encipherment"},
+	{x509.KeyUsageKeyAgreement, "Key Agreement"},
+	{x509.KeyUsageCertSign, "Cert Sign"},
+	{x509.KeyUsageCRLSign, "CRL Sign"},
+	{x509.KeyUsageEncipherOnly, "Encipher Only"},
+	{x509.KeyUsageDecipherOnly, "Decipher Only"},
+}
+
+var extKeyUsageNames = map[x509.ExtKeyUsage]string{
+	x509.ExtKeyUsageAny:                        "Any",
+	x509.ExtKeyUsageServerAuth:                 "Server Authentication",
+	x509.ExtKeyUsageClientAuth:                 "Client Authentication",
+	x509.ExtKeyUsageCodeSigning:                "Code Signing",
+	x509.ExtKeyUsageEmailProtection:            "Email Protection",
+	x509.ExtKeyUsageIPSECEndSystem:             "IPSEC End System",
+	x509.ExtKeyUsageIPSECTunnel:                "IPSEC Tunnel",
+	x509.ExtKeyUsageIPSECUser:                  "IPSEC User",
+	x509.ExtKeyUsageTimeStamping:               "Time Stamping",
+	x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
+	x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
+	x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
+}
+
 func keyUsageStrings(ku x509.KeyUsage) []string {
-	bits := []struct {
-		bit  x509.KeyUsage
-		name string
-	}{
-		{x509.KeyUsageDigitalSignature, "Digital Signature"},
-		{x509.KeyUsageContentCommitment, "Content Commitment"},
-		{x509.KeyUsageKeyEncipherment, "Key Encipherment"},
-		{x509.KeyUsageDataEncipherment, "Data Encipherment"},
-		{x509.KeyUsageKeyAgreement, "Key Agreement"},
-		{x509.KeyUsageCertSign, "Cert Sign"},
-		{x509.KeyUsageCRLSign, "CRL Sign"},
-		{x509.KeyUsageEncipherOnly, "Encipher Only"},
-		{x509.KeyUsageDecipherOnly, "Decipher Only"},
-	}
 	var usages []string
-	for _, b := range bits {
+	for _, b := range keyUsageBits {
 		if ku&b.bit != 0 {
 			usages = append(usages, b.name)
 		}
@@ -104,23 +121,9 @@ func keyUsageStrings(ku x509.KeyUsage) []string {
 }
 
 func extKeyUsageStrings(ekus []x509.ExtKeyUsage) []string {
-	names := map[x509.ExtKeyUsage]string{
-		x509.ExtKeyUsageAny:                        "Any",
-		x509.ExtKeyUsageServerAuth:                 "Server Authentication",
-		x509.ExtKeyUsageClientAuth:                 "Client Authentication",
-		x509.ExtKeyUsageCodeSigning:                "Code Signing",
-		x509.ExtKeyUsageEmailProtection:            "Email Protection",
-		x509.ExtKeyUsageIPSECEndSystem:             "IPSEC End System",
-		x509.ExtKeyUsageIPSECTunnel:                "IPSEC Tunnel",
-		x509.ExtKeyUsageIPSECUser:                  "IPSEC User",
-		x509.ExtKeyUsageTimeStamping:               "Time Stamping",
-		x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
-		x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
-		x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
-	}
 	var result []string
 	for _, eku := range ekus {
-		if name, ok := names[eku]; ok {
+		if name, ok := extKeyUsageNames[eku]; ok {
 			result = append(result, name)
 		} else {
 			result = append(result, fmt.Sprintf("Unknown(%d)", eku))
@@ -141,8 +144,8 @@ func newCertDetails(cert *x509.Certificate, rawPEM string, index int) *CertDetai
 		Serial:           formatSerial(cert.SerialNumber),
 		NotBeforeStr:     cert.NotBefore.UTC().Format(certTimeFormat),
 		NotAfterStr:      cert.NotAfter.UTC().Format(certTimeFormat),
-		Skid:             formatKeyId(cert.SubjectKeyId),
-		Akid:             formatKeyId(cert.AuthorityKeyId),
+		SKID:             formatKeyID(cert.SubjectKeyId),
+		AKID:             formatKeyID(cert.AuthorityKeyId),
 		KeyUsages:        keyUsageStrings(cert.KeyUsage),
 		ExtKeyUsages:     extKeyUsageStrings(cert.ExtKeyUsage),
 		ComplianceIssues: complianceIssues(cert),
@@ -156,7 +159,7 @@ func fetchCertsFromTLS(ctx context.Context, host string, port int) ([]*x509.Cert
 	ctx, cancel := context.WithTimeout(ctx, tlsDialTimeout)
 	defer cancel()
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: tlsDialTimeout},
 		Config: &tls.Config{
@@ -191,7 +194,7 @@ func parseCertsFromBytes(data []byte) ([]*x509.Certificate, []string, error) {
 		if block.Type == "CERTIFICATE" {
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse certificate: %v", err)
+				return nil, nil, fmt.Errorf("failed to parse certificate: %w", err)
 			}
 			certs = append(certs, cert)
 			pems = append(pems, string(pem.EncodeToMemory(block)))
@@ -312,19 +315,18 @@ func verifySignaturesDetails(ordered []*CertDetails) error {
 }
 
 func getCertRoleName(index, total int, isSelfSigned, isCA bool) string {
-	switch { //nolint:staticcheck // cases compare index against computed total-1; tagged switch not applicable
-	case index == total-1:
+	if index == total-1 {
 		switch {
 		case isSelfSigned && isCA:
 			return "Root (Self-Signed)"
-		case isSelfSigned && !isCA:
+		case isSelfSigned:
 			return "Leaf (Self-Signed, No CA)"
 		default:
 			return "Root/Anchor (Not Self-Signed)"
 		}
-	case index == 0:
-		return "Leaf"
-	default:
-		return fmt.Sprintf("Intermediate %d", index)
 	}
+	if index == 0 {
+		return "Leaf"
+	}
+	return fmt.Sprintf("Intermediate %d", index)
 }

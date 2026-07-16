@@ -24,6 +24,11 @@ var (
 	sWarn   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 	sDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
+	// Bold variants of the role colors, used for role labels and headers.
+	sGreenBold  = sGreen.Bold(true)
+	sYellowBold = sYellow.Bold(true)
+	sCyanBold   = sCyan.Bold(true)
+
 	sBorderIdentical = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("10")).Padding(0, 1)
 	sBorderRenewed   = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("11")).Padding(0, 1)
 	sBorderDiff      = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("9")).Padding(0, 1)
@@ -41,7 +46,7 @@ func certField(key, val string) string {
 }
 
 func renderPageHeader(sb *strings.Builder, title string, meta []string, width int) {
-	fmt.Fprintf(sb, "%s\n", sCyan.Bold(true).Render(title))
+	fmt.Fprintf(sb, "%s\n", sCyanBold.Render(title))
 	for _, m := range meta {
 		fmt.Fprintf(sb, "%s\n", sDim.Render(m))
 	}
@@ -66,11 +71,11 @@ func renderCertCommonFields(sb *strings.Builder, c *CertDetails, notYetActive, e
 	default:
 		sb.WriteString(certField("Status", sPass.Render(fmt.Sprintf("ACTIVE (%d days remaining)", daysLeft))))
 	}
-	if c.Skid != "" {
-		sb.WriteString(certField("SKID", c.Skid))
+	if c.SKID != "" {
+		sb.WriteString(certField("SKID", c.SKID))
 	}
-	if c.Akid != "" {
-		sb.WriteString(certField("AKID", c.Akid))
+	if c.AKID != "" {
+		sb.WriteString(certField("AKID", c.AKID))
 	}
 	if len(c.KeyUsages) > 0 {
 		sb.WriteString(certField("Key Usage", strings.Join(c.KeyUsages, ", ")))
@@ -98,7 +103,9 @@ func renderCertBlocksSection(sb *strings.Builder, statuses []CertStatus, width i
 }
 
 func renderSigSection(sb *strings.Builder, sigErr error, width int) {
-	sb.WriteString(renderSignatureVerification(sigErr))
+	renderResultSection(sb, "Cryptographic Signature Verification", "Chain signatures verified successfully.", sigErr)
+	// Historical quirk kept for output stability: this section has a blank
+	// line before its separator, the hostname section does not.
 	fmt.Fprintf(sb, "\n%s\n\n", sepDash(width))
 }
 
@@ -111,7 +118,9 @@ func renderPassFail(sb *strings.Builder, passed bool, successMsg, failMsg string
 		fmt.Fprintf(sb, "%s\n", sPass.Render(successMsg))
 	} else {
 		fmt.Fprintf(sb, "%s\n", sFail.Render(failMsg))
-		fmt.Fprintf(sb, "Reasons: %s\n", strings.Join(reasons, "; "))
+		if len(reasons) > 0 {
+			fmt.Fprintf(sb, "Reasons: %s\n", strings.Join(reasons, "; "))
+		}
 	}
 }
 
@@ -142,18 +151,23 @@ func renderOrderSection(sb *strings.Builder, sectionLabel, physicalLabel string,
 	}
 }
 
+// certHeader renders the "[n] Role" heading above a certificate block.
+func certHeader(style lipgloss.Style, index int, role string) string {
+	return style.Render(fmt.Sprintf("[%d] %s", index, role))
+}
+
 func renderCertBlock(c *CertDetails, s CertStatus, idx int) string {
 	var sb strings.Builder
 
-	roleColor := sYellow
+	style := sYellowBold
 	switch {
 	case idx == 0:
-		roleColor = sGreen
+		style = sGreenBold
 	case c.IsSelfSigned && c.Cert.IsCA:
-		roleColor = sCyan
+		style = sCyanBold
 	}
 
-	fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", idx+1, s.Role)))
+	fmt.Fprintf(&sb, "%s\n", certHeader(style, idx+1, s.Role))
 	renderCertCommonFields(&sb, c, s.NotYetActive, s.Expired, s.DaysLeft)
 
 	return sb.String()
@@ -175,16 +189,16 @@ func renderChainTree(ordered []*CertDetails) string {
 		case 0:
 			switch {
 			case cert.IsSelfSigned && cert.Cert.IsCA:
-				roleLabel = sCyan.Bold(true).Render("[Root]")
+				roleLabel = sCyanBold.Render("[Root]")
 			case cert.IsSelfSigned:
-				roleLabel = sGreen.Bold(true).Render("[Leaf*]")
+				roleLabel = sGreenBold.Render("[Leaf*]")
 			default:
-				roleLabel = sYellow.Bold(true).Render("[Anchor]")
+				roleLabel = sYellowBold.Render("[Anchor]")
 			}
 		case n - 1:
-			roleLabel = sGreen.Bold(true).Render("[Leaf]")
+			roleLabel = sGreenBold.Render("[Leaf]")
 		default:
-			roleLabel = sYellow.Bold(true).Render(fmt.Sprintf("[Interm %d]", n-1-i))
+			roleLabel = sYellowBold.Render(fmt.Sprintf("[Interm %d]", idx))
 		}
 
 		connector := ""
@@ -196,61 +210,47 @@ func renderChainTree(ordered []*CertDetails) string {
 	return sb.String()
 }
 
-func renderSignatureVerification(err error) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", label("Cryptographic Signature Verification"))
-	if err == nil {
-		fmt.Fprintf(&sb, "  Result: %s\n", sPass.Render("PASS"))
-		sb.WriteString("  Detail: Chain signatures verified successfully.\n")
-	} else {
-		fmt.Fprintf(&sb, "  Result: %s\n", sFail.Render("FAIL"))
-		fmt.Fprintf(&sb, "  Detail: %v\n", err)
-	}
-	return sb.String()
-}
-
-func renderHostnameSection(sb *strings.Builder, host string, err error, width int) {
-	fmt.Fprintf(sb, "%s\n", label("Hostname Verification"))
+// renderResultSection writes a labeled PASS/FAIL block: PASS with passDetail
+// when err is nil, FAIL with the error otherwise.
+func renderResultSection(sb *strings.Builder, title, passDetail string, err error) {
+	fmt.Fprintf(sb, "%s\n", label(title))
 	if err == nil {
 		fmt.Fprintf(sb, "  Result: %s\n", sPass.Render("PASS"))
-		fmt.Fprintf(sb, "  Detail: Leaf certificate is valid for %s.\n", host)
+		fmt.Fprintf(sb, "  Detail: %s\n", passDetail)
 	} else {
 		fmt.Fprintf(sb, "  Result: %s\n", sFail.Render("FAIL"))
 		fmt.Fprintf(sb, "  Detail: %v\n", err)
 	}
+}
+
+func renderHostnameSection(sb *strings.Builder, host string, err error, width int) {
+	renderResultSection(sb, "Hostname Verification", fmt.Sprintf("Leaf certificate is valid for %s.", host), err)
 	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
+}
+
+// compareStatusRender maps a diff position status to its badge text/style and
+// panel border style.
+var compareStatusRender = map[PositionStatus]struct {
+	badge string
+	style lipgloss.Style
+	panel lipgloss.Style
+}{
+	StatusIdentical: {"IDENTICAL", sPass, sBorderIdentical},
+	StatusRenewed:   {"RENEWED", sWarn, sBorderRenewed},
+	StatusDifferent: {"DIFFERENT", sFail, sBorderDiff},
+	StatusAdded:     {"ADDED", sFail, sBorderDiff},
+	StatusRemoved:   {"REMOVED", sFail, sBorderDiff},
 }
 
 func renderComparePanels(p PositionResult, colWidth int) string {
 	var sb strings.Builder
 
-	var badge string
-	var panelStyle lipgloss.Style
-	switch p.Status {
-	case StatusIdentical:
-		badge = sPass.Render("IDENTICAL")
-		panelStyle = sBorderIdentical
-	case StatusRenewed:
-		badge = sWarn.Render("RENEWED")
-		panelStyle = sBorderRenewed
-	case StatusDifferent:
-		badge = sFail.Render("DIFFERENT")
-		panelStyle = sBorderDiff
-	case StatusAdded:
-		badge = sFail.Render("ADDED")
-		panelStyle = sBorderDiff
-	case StatusRemoved:
-		badge = sFail.Render("REMOVED")
-		panelStyle = sBorderDiff
-	}
+	cs := compareStatusRender[p.Status]
+	fmt.Fprintf(&sb, "%s  %s\n", sBold.Render(fmt.Sprintf("Position %d", p.Idx+1)), cs.style.Render(cs.badge))
 
-	fmt.Fprintf(&sb, "%s  %s\n", sBold.Render(fmt.Sprintf("Position %d", p.Idx+1)), badge)
-
-	newContent := renderComparePanel(p.New, p.RoleNew)
-	oldContent := renderComparePanel(p.Old, p.RoleOld)
-
-	newPanel := panelStyle.Width(colWidth).Render(newContent)
-	oldPanel := panelStyle.Width(colWidth).Render(oldContent)
+	panel := cs.panel.Width(colWidth)
+	oldPanel := panel.Render(renderComparePanel(p.Old, p.RoleOld))
+	newPanel := panel.Render(renderComparePanel(p.New, p.RoleNew))
 
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, oldPanel, "  ", newPanel))
 	sb.WriteString("\n\n")
@@ -318,14 +318,14 @@ func renderShowResult(r *ShowResult, width int) string {
 
 	now := time.Now().UTC()
 	for _, cert := range r.Certs {
-		roleColor := sGreen
+		style := sGreenBold
 		role := "Leaf"
 		switch {
 		case cert.IsSelfSigned && cert.Cert.IsCA:
-			roleColor = sCyan
-			role = "Root CA (Self-Signed)"
+			style = sCyanBold
+			role = "Root (Self-Signed)"
 		case cert.Cert.IsCA:
-			roleColor = sYellow
+			style = sYellowBold
 			role = "CA"
 		case cert.IsSelfSigned:
 			role = "Leaf (Self-Signed, No CA)"
@@ -333,7 +333,7 @@ func renderShowResult(r *ShowResult, width int) string {
 
 		notYetActive, expired, daysLeft := certTimeStatus(cert.Cert, now)
 
-		fmt.Fprintf(&sb, "%s\n", roleColor.Bold(true).Render(fmt.Sprintf("[%d] %s", cert.Index, role)))
+		fmt.Fprintf(&sb, "%s\n", certHeader(style, cert.Index, role))
 		renderCertCommonFields(&sb, cert, notYetActive, expired, daysLeft)
 		sb.WriteString("\n")
 	}
@@ -418,12 +418,10 @@ func renderMatchResult(r *MatchResult, width int) string {
 		sb.WriteString(certField("File Key", r.KeyPubKey))
 	}
 
-	fmt.Fprintf(&sb, "\n%s\n", sepEq(width))
-	if r.Matched {
-		fmt.Fprintf(&sb, "%s\n", sPass.Render("MATCH: certificate and key correspond."))
-	} else {
-		fmt.Fprintf(&sb, "%s\n", sFail.Render("MISMATCH: certificate and key do not correspond."))
-	}
+	renderPassFail(&sb, r.Matched,
+		"MATCH: certificate and key correspond.",
+		"MISMATCH: certificate and key do not correspond.",
+		nil, width)
 	return sb.String()
 }
 

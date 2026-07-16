@@ -47,14 +47,12 @@ func (m pagerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		if !m.ready {
-			m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(msg.Height-1))
-			m.viewport.SetContent(m.renderFn(msg.Width))
+			m.viewport = viewport.New()
 			m.ready = true
-		} else {
-			m.viewport.SetWidth(msg.Width)
-			m.viewport.SetHeight(msg.Height - 1)
-			m.viewport.SetContent(m.renderFn(msg.Width))
 		}
+		m.viewport.SetWidth(msg.Width)
+		m.viewport.SetHeight(msg.Height - 1)
+		m.viewport.SetContent(m.renderFn(msg.Width))
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)

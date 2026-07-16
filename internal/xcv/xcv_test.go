@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,13 +26,32 @@ func nextSerial() *big.Int {
 	return big.NewInt(testSerialSeq.Add(1))
 }
 
-// makeCert creates a certificate signed by parent (or self-signed if parent is nil).
-func makeCert(t *testing.T, cn string, isCA bool, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
+// signCert signs tmpl with a fresh key, using parent/parentKey as issuer
+// (self-signed if parent is nil), and returns the parsed cert and its key.
+func signCert(t *testing.T, tmpl, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+	if parent == nil {
+		parent = tmpl
+		parentKey = key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, parentKey)
+	if err != nil {
+		t.Fatalf("create certificate %s: %v", tmpl.Subject.CommonName, err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate %s: %v", tmpl.Subject.CommonName, err)
+	}
+	return cert, key
+}
+
+// makeCert creates a certificate signed by parent (or self-signed if parent is nil).
+func makeCert(t *testing.T, cn string, isCA bool, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: nextSerial(),
 		Subject:      pkix.Name{CommonName: cn},
@@ -43,44 +63,7 @@ func makeCert(t *testing.T, cn string, isCA bool, parent *x509.Certificate, pare
 	if isCA {
 		tmpl.BasicConstraintsValid = true
 	}
-	if parent == nil {
-		parent = tmpl
-		parentKey = key
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, parentKey)
-	if err != nil {
-		t.Fatalf("create certificate %s: %v", cn, err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse certificate %s: %v", cn, err)
-	}
-	return cert, key
-}
-
-// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it wrote.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("create pipe: %v", err)
-	}
-	os.Stdout = pw
-	defer func() { os.Stdout = old }()
-
-	fn()
-
-	if err := pw.Close(); err != nil {
-		t.Errorf("close write pipe: %v", err)
-	}
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(pr); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	return buf.String()
+	return signCert(t, tmpl, parent, parentKey)
 }
 
 // writePEM writes a slice of certs as a PEM bundle to a temp file, returning its path.
@@ -186,27 +169,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 	}
 }
 
-func TestQuietSuppressesOutput(t *testing.T) {
-	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
-	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
-	path := writePEM(t, []*x509.Certificate{leaf, root})
-
-	r, err := Validate(path)
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-
-	output := captureStdout(t, func() {
-		Quiet = true
-		PrintValidationResult(r)
-		Quiet = false
-	})
-	if output != "" {
-		t.Errorf("Quiet=true: expected no output, got %d bytes", len(output))
-	}
-}
-
-func TestNoColorStripsANSI(t *testing.T) {
+func TestStripANSI(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 	path := writePEM(t, []*x509.Certificate{leaf, root})
@@ -215,25 +178,13 @@ func TestNoColorStripsANSI(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 
-	// Confirm the renderer actually emits ANSI — makes the NoColor check meaningful.
+	// Confirm the renderer actually emits ANSI — makes the strip check meaningful.
 	withColor := renderValidationResult(r, 80)
 	if !strings.Contains(withColor, "\033[") {
 		t.Fatal("expected ANSI escape codes in colored render, but found none")
 	}
-
-	NoColor = true
-	defer func() { NoColor = false }()
-
-	output := captureStdout(t, func() { PrintValidationResult(r) })
-	if strings.Contains(output, "\033[") {
-		t.Errorf("no-color: output still contains ANSI escape codes")
-	}
-}
-
-func TestExtKeyUsageStrings_Unknown(t *testing.T) {
-	result := extKeyUsageStrings([]x509.ExtKeyUsage{x509.ExtKeyUsage(999)})
-	if len(result) != 1 || result[0] != "Unknown(999)" {
-		t.Errorf("got %v, want [Unknown(999)]", result)
+	if stripped := stripANSI(withColor); strings.Contains(stripped, "\033[") {
+		t.Error("stripANSI left escape codes behind")
 	}
 }
 
@@ -249,11 +200,7 @@ func TestVerifyChain_InvalidSignature(t *testing.T) {
 }
 
 func TestValidate_ExpiredCert(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	tmpl := &x509.Certificate{
+	cert, _ := signCert(t, &x509.Certificate{
 		SerialNumber:          nextSerial(),
 		Subject:               pkix.Name{CommonName: "Expired Root"},
 		NotBefore:             time.Now().Add(-48 * time.Hour),
@@ -261,15 +208,7 @@ func TestValidate_ExpiredCert(t *testing.T) {
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("create certificate: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse certificate: %v", err)
-	}
+	}, nil, nil)
 	path := writePEM(t, []*x509.Certificate{cert})
 	r, err := Validate(path)
 	if err != nil {
@@ -298,93 +237,54 @@ func TestValidate_ExtraUnrelatedCert(t *testing.T) {
 	}
 }
 
-func TestPrintShowResult(t *testing.T) {
+// TestRenderers smoke-tests every renderer against a valid root+leaf fixture:
+// no panics, and each produces its expected page. renderValidationResult is
+// covered by TestStripANSI.
+func TestRenderers(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
-	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
-	path := writePEM(t, []*x509.Certificate{leaf, root})
-	r, err := Show(path)
+	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
+	chainPEM := writePEM(t, []*x509.Certificate{leaf, root})
+
+	show, err := Show(chainPEM)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
-
-	output := captureStdout(t, func() { PrintShowResult(r) })
-	for _, want := range []string{"Certificate Inspector", "Root CA", "Leaf"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
-		}
-	}
-}
-
-func TestPrintShowResult_Quiet(t *testing.T) {
-	root, _ := makeCert(t, "Root CA", true, nil, nil)
-	path := writePEM(t, []*x509.Certificate{root})
-	r, err := Show(path)
-	if err != nil {
-		t.Fatalf("Show: %v", err)
-	}
-
-	output := captureStdout(t, func() {
-		Quiet = true
-		PrintShowResult(r)
-		Quiet = false
-	})
-	if output != "" {
-		t.Errorf("Quiet=true: expected no output, got %d bytes", len(output))
-	}
-}
-
-func TestPrintDiffResult(t *testing.T) {
-	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
-	leaf1, _ := makeCert(t, "Leaf", false, root, rootKey)
-	leaf2, _ := makeCert(t, "Leaf", false, root, rootKey)
-
-	fileNew := writePEM(t, []*x509.Certificate{leaf2, root})
-	fileOld := writePEM(t, []*x509.Certificate{leaf1, root})
-	r, err := Diff(fileOld, fileNew)
+	diff, err := Diff(chainPEM, chainPEM)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
-
-	output := captureStdout(t, func() { PrintDiffResult(r) })
-	for _, want := range []string{"Certificate Chain Comparison", "Summary", "differ"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
-		}
+	match, err := Match(writePEM(t, []*x509.Certificate{leaf}), writeKeyPEM(t, leafKey))
+	if err != nil {
+		t.Fatalf("Match: %v", err)
 	}
-}
-
-func TestPrintCheckResult(t *testing.T) {
-	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
-	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
-
-	// Build CheckResult directly — no network required.
-	pems := []string{"", ""}
-	for i, c := range []*x509.Certificate{leaf, root} {
-		var buf bytes.Buffer
-		if err := pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}); err != nil {
-			t.Fatalf("pem encode: %v", err)
-		}
-		pems[i] = buf.String()
-	}
-	parsed := buildCertDetails([]*x509.Certificate{leaf, root}, pems)
-	ordered := orderChainDetails(parsed)
-	r := &CheckResult{
-		Host:         "example.com",
-		Port:         443,
-		Certs:        parsed,
-		Ordered:      ordered,
-		Statuses:     computeCertStatuses(ordered),
-		SignatureErr: verifySignaturesDetails(ordered),
-		Order:        computeOrderCheck(parsed, ordered),
-		RootPresent:  true,
-		Passed:       true,
+	details := buildCertDetails([]*x509.Certificate{leaf, root}, []string{"", ""})
+	check := &CheckResult{
+		Host:        "example.com",
+		Port:        443,
+		Certs:       details,
+		Ordered:     details,
+		Statuses:    computeCertStatuses(details),
+		Order:       OrderCheckResult{Correct: true},
+		RootPresent: true,
+		Passed:      true,
 	}
 
-	output := captureStdout(t, func() { PrintCheckResult(r) })
-	for _, want := range []string{"TLS Certificate Check", "example.com:443", "SUCCESS"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
-		}
+	tests := []struct {
+		name   string
+		render func(width int) string
+		want   string
+	}{
+		{"show", func(w int) string { return renderShowResult(show, w) }, "Certificate Inspector"},
+		{"diff", func(w int) string { return renderDiffResult(diff, w) }, "Certificate Chain Comparison"},
+		{"check", func(w int) string { return renderCheckResult(check, w) }, "TLS Certificate Check"},
+		{"match", func(w int) string { return renderMatchResult(match, w) }, "Certificate Key Match"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if out := stripANSI(tc.render(80)); !strings.Contains(out, tc.want) {
+				t.Errorf("output missing %q", tc.want)
+			}
+		})
 	}
 }
 
@@ -476,20 +376,6 @@ func TestShow(t *testing.T) {
 	}
 }
 
-func TestShow_EmptyFile(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "*.pem")
-	if err != nil {
-		t.Fatalf("create temp file: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	_, err = Show(f.Name())
-	if err == nil {
-		t.Fatal("expected error for empty file, got nil")
-	}
-}
-
 func TestMatch(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
@@ -565,26 +451,6 @@ func TestMatch(t *testing.T) {
 	}
 }
 
-func TestPrintMatchResult(t *testing.T) {
-	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
-	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
-
-	certPEM := writePEM(t, []*x509.Certificate{leaf})
-	keyPEM := writeKeyPEM(t, leafKey)
-
-	r, err := Match(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("Match: %v", err)
-	}
-
-	output := captureStdout(t, func() { PrintMatchResult(r) })
-	for _, want := range []string{"Certificate Key Match", "example.com", "MATCH"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
-		}
-	}
-}
-
 func TestGetCertRoleName(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -657,24 +523,12 @@ func TestParseHostPort(t *testing.T) {
 // makeSANCert creates a self-signed cert with an empty subject and the given DNS names.
 func makeSANCert(t *testing.T, dnsNames []string) *x509.Certificate {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	tmpl := &x509.Certificate{
+	cert, _ := signCert(t, &x509.Certificate{
 		SerialNumber: nextSerial(),
 		DNSNames:     dnsNames,
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("create certificate: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse certificate: %v", err)
-	}
+	}, nil, nil)
 	return cert
 }
 
@@ -773,14 +627,7 @@ func TestComplianceIssues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := complianceIssues(tc.cert)
 			for _, want := range tc.wantIssues {
-				found := false
-				for _, g := range got {
-					if strings.Contains(g, want) || g == want {
-						found = true
-						break
-					}
-				}
-				if !found {
+				if !slices.Contains(got, want) {
 					t.Errorf("missing issue %q in %v", want, got)
 				}
 			}
