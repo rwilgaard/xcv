@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,9 +25,17 @@ func loadChain(path string) ([]*CertDetails, error) {
 		return nil, err
 	}
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in %s; ensure certificates are in PEM format", path)
+		return nil, fmt.Errorf("no certificate blocks found in %s; ensure certificates are in PEM format", displayName(path))
 	}
 	return buildCertDetails(certs, pems), nil
+}
+
+// displayName returns the label shown in output headers for an input path.
+func displayName(path string) string {
+	if path == "-" {
+		return "(stdin)"
+	}
+	return path
 }
 
 // chainAnalysis bundles the checks shared by Validate and Check.
@@ -83,7 +90,7 @@ func Validate(path string) (*ValidationResult, error) {
 	}
 
 	return &ValidationResult{
-		Path:            path,
+		Path:            displayName(path),
 		ParsedCerts:     parsedCerts,
 		Ordered:         ordered,
 		Statuses:        a.Statuses,
@@ -146,7 +153,7 @@ func Show(path string) (*ShowResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ShowResult{Path: path, Certs: certs}, nil
+	return &ShowResult{Path: displayName(path), Certs: certs}, nil
 }
 
 // Match determines whether a private key corresponds to the public key embedded
@@ -154,13 +161,13 @@ func Show(path string) (*ShowResult, error) {
 // detects which file contains the certificate and which contains the private key
 // by inspecting PEM block types.
 func Match(path1, path2 string) (*MatchResult, error) {
-	data1, err := os.ReadFile(path1)
+	data1, err := readInput(path1)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path1, err)
+		return nil, fmt.Errorf("read %s: %w", displayName(path1), err)
 	}
-	data2, err := os.ReadFile(path2)
+	data2, err := readInput(path2)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path2, err)
+		return nil, fmt.Errorf("read %s: %w", displayName(path2), err)
 	}
 
 	has1Cert, has1Key := classifyPEM(data1)
@@ -186,10 +193,10 @@ func Match(path1, path2 string) (*MatchResult, error) {
 
 	certs, pems, err := parseCertsFromBytes(certData)
 	if err != nil {
-		return nil, fmt.Errorf("parse certificate file %s: %w", certPath, err)
+		return nil, fmt.Errorf("parse certificate file %s: %w", displayName(certPath), err)
 	}
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificates found in %s", certPath)
+		return nil, fmt.Errorf("no certificates found in %s", displayName(certPath))
 	}
 	leaf := orderChainDetails(buildCertDetails(certs, pems))[0]
 
@@ -200,7 +207,7 @@ func Match(path1, path2 string) (*MatchResult, error) {
 
 	keyPub, keyType, err := extractPublicKeyFromPEM(keyData)
 	if err != nil {
-		return nil, fmt.Errorf("parse key file %s: %w", keyPath, err)
+		return nil, fmt.Errorf("parse key file %s: %w", displayName(keyPath), err)
 	}
 	keyFP, err := pubKeyFingerprint(keyPub)
 	if err != nil {
@@ -208,8 +215,8 @@ func Match(path1, path2 string) (*MatchResult, error) {
 	}
 
 	return &MatchResult{
-		CertPath:    certPath,
-		KeyPath:     keyPath,
+		CertPath:    displayName(certPath),
+		KeyPath:     displayName(keyPath),
 		CertSubject: leaf.SubjectCN,
 		KeyType:     keyType,
 		CertPubKey:  certFP,
@@ -334,8 +341,8 @@ func Diff(fileOld, fileNew string) (*DiffResult, error) {
 	orderedOld := orderChainDetails(parsedOld)
 
 	return &DiffResult{
-		FileNew:    fileNew,
-		FileOld:    fileOld,
+		FileNew:    displayName(fileNew),
+		FileOld:    displayName(fileOld),
 		ParsedNew:  parsedNew,
 		ParsedOld:  parsedOld,
 		OrderedNew: orderedNew,

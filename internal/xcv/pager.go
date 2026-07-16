@@ -22,6 +22,11 @@ func isTerminal(f *os.File) bool {
 	return charmbterm.IsTerminal(f.Fd())
 }
 
+// StdinIsTerminal reports whether stdin is attached to a terminal.
+func StdinIsTerminal() bool {
+	return isTerminal(os.Stdin)
+}
+
 func termWidth() int {
 	w, _, err := charmbterm.GetSize(os.Stdout.Fd())
 	if err != nil || w <= 0 {
@@ -73,15 +78,32 @@ func (m pagerModel) View() tea.View {
 	return v
 }
 
+// pagerKeyInput returns the file the pager should read keystrokes from.
+// When stdin carried piped input, keys come from the controlling terminal
+// instead. nil means bubbletea's default (stdin).
+func pagerKeyInput() (*os.File, error) {
+	if isTerminal(os.Stdin) {
+		return nil, nil
+	}
+	return os.Open("/dev/tty")
+}
+
 func display(renderFn func(width int) string) {
 	if Quiet {
 		return
 	}
 	tty := isTerminal(os.Stdout)
 	if tty && !NoColor && !NoPager {
-		p := tea.NewProgram(pagerModel{renderFn: renderFn})
-		if _, err := p.Run(); err == nil {
-			return
+		if in, err := pagerKeyInput(); err == nil {
+			var opts []tea.ProgramOption
+			if in != nil {
+				defer in.Close() //nolint:errcheck // read-only fd
+				opts = append(opts, tea.WithInput(in))
+			}
+			p := tea.NewProgram(pagerModel{renderFn: renderFn}, opts...)
+			if _, err := p.Run(); err == nil {
+				return
+			}
 		}
 	}
 	w := 80

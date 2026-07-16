@@ -376,6 +376,75 @@ func TestShow(t *testing.T) {
 	}
 }
 
+// Not parallel: swaps os.Stdin.
+func TestShowFromStdin(t *testing.T) {
+	root, _ := makeCert(t, "Stdin Root", true, nil, nil)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old })
+
+	go func() {
+		_ = pem.Encode(w, &pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})
+		_ = w.Close()
+	}()
+
+	res, err := Show("-")
+	if err != nil {
+		t.Fatalf("Show(-): %v", err)
+	}
+	if res.Path != "(stdin)" {
+		t.Errorf("Path = %q, want %q", res.Path, "(stdin)")
+	}
+	if len(res.Certs) != 1 {
+		t.Errorf("got %d certs, want 1", len(res.Certs))
+	}
+}
+
+// Not parallel: swaps os.Stdin.
+func TestMatchFromStdin(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
+
+	certPEM := writePEM(t, []*x509.Certificate{leaf})
+
+	der, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old })
+
+	go func() {
+		_ = pem.Encode(w, &pem.Block{Type: "PRIVATE KEY", Bytes: der})
+		_ = w.Close()
+	}()
+
+	res, err := Match("-", certPEM)
+	if err != nil {
+		t.Fatalf("Match(-,cert): %v", err)
+	}
+	if !res.Matched {
+		t.Errorf("Matched = false, want true; CertPubKey=%s KeyPubKey=%s", res.CertPubKey, res.KeyPubKey)
+	}
+	if res.KeyPath != "(stdin)" {
+		t.Errorf("KeyPath = %q, want %q", res.KeyPath, "(stdin)")
+	}
+	if res.CertPath != certPEM {
+		t.Errorf("CertPath = %q, want %q", res.CertPath, certPEM)
+	}
+}
+
 func TestMatch(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, leafKey := makeCert(t, "example.com", false, root, rootKey)
@@ -633,4 +702,50 @@ func TestComplianceIssues(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadInput(t *testing.T) {
+	t.Run("file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "in.pem")
+		if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		data, err := readInput(path)
+		if err != nil {
+			t.Fatalf("readInput(file): %v", err)
+		}
+		if string(data) != "hello" {
+			t.Errorf("got %q, want %q", data, "hello")
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		if _, err := readInput(filepath.Join(t.TempDir(), "nope.pem")); err == nil {
+			t.Error("expected error for missing file")
+		}
+	})
+
+	// Not parallel: swaps os.Stdin.
+	t.Run("stdin", func(t *testing.T) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stdin
+		os.Stdin = r
+		t.Cleanup(func() { os.Stdin = old })
+
+		go func() {
+			_, _ = w.WriteString("piped")
+			_ = w.Close()
+		}()
+
+		data, err := readInput("-")
+		if err != nil {
+			t.Fatalf("readInput(-): %v", err)
+		}
+		if string(data) != "piped" {
+			t.Errorf("got %q, want %q", data, "piped")
+		}
+	})
 }

@@ -51,6 +51,32 @@ func printErr(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", prefix, msg)
 }
 
+// resolveInput picks the input for single-file commands: the explicit arg,
+// or "-" when input is piped in.
+func resolveInput(args []string) (string, error) {
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	if !xcv.StdinIsTerminal() {
+		return "-", nil
+	}
+	return "", errors.New("no input: provide a file or pipe to stdin")
+}
+
+// guardSingleStdin rejects "-" in more than one argument.
+func guardSingleStdin(args []string) error {
+	stdinArgs := 0
+	for _, a := range args {
+		if a == "-" {
+			stdinArgs++
+		}
+	}
+	if stdinArgs > 1 {
+		return errors.New("stdin can only be used for one argument")
+	}
+	return nil
+}
+
 func newCheckCmd() *cobra.Command {
 	var port int
 	cmd := &cobra.Command{
@@ -84,14 +110,20 @@ Accepts: example.com, example.com:8443, https://example.com`,
 
 func newShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "show <file>",
+		Use:   "show [file]",
 		Short: "Display certificate details without chain validation",
 		Long: `Parse a PEM file and display certificate details (subject, issuer, serial,
 validity, key usage, RFC compliance issues) for each certificate.
-No chain validation, no PASS/FAIL — information only.`,
-		Args: cobra.ExactArgs(1),
+No chain validation, no PASS/FAIL — information only.
+
+Use '-' to read from stdin; with no argument, reads stdin when piped.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Show(args[0])
+			path, err := resolveInput(args)
+			if err != nil {
+				return err
+			}
+			r, err := xcv.Show(path)
 			if err != nil {
 				return err
 			}
@@ -103,13 +135,19 @@ No chain validation, no PASS/FAIL — information only.`,
 
 func newValidateCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate <file>",
+		Use:   "validate [file]",
 		Short: "Validate a PEM certificate chain file",
 		Long: `Validate a PEM certificate chain file. Checks certificate expiry,
-cryptographic signatures, chain completeness, and physical PEM ordering.`,
-		Args: cobra.ExactArgs(1),
+cryptographic signatures, chain completeness, and physical PEM ordering.
+
+Use '-' to read from stdin; with no argument, reads stdin when piped.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := xcv.Validate(args[0])
+			path, err := resolveInput(args)
+			if err != nil {
+				return err
+			}
+			r, err := xcv.Validate(path)
 			if err != nil {
 				return err
 			}
@@ -126,9 +164,14 @@ func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff <old_file> <new_file>",
 		Short: "Compare two PEM certificate chain files",
-		Long:  `Compare two PEM certificate chain files side-by-side (old on left, new on right).`,
-		Args:  cobra.ExactArgs(2),
+		Long: `Compare two PEM certificate chain files side-by-side (old on left, new on right).
+
+Use '-' to read one side from stdin.`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := guardSingleStdin(args); err != nil {
+				return err
+			}
 			r, err := xcv.Diff(args[0], args[1])
 			if err != nil {
 				return err
@@ -148,9 +191,14 @@ a certificate. File order is flexible — the command detects which file is
 the certificate and which is the private key from PEM block headers.
 
 Supported key formats: PKCS#8 (BEGIN PRIVATE KEY), PKCS#1 RSA (BEGIN RSA PRIVATE KEY),
-SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.`,
+SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.
+
+Use '-' to read one side from stdin.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := guardSingleStdin(args); err != nil {
+				return err
+			}
 			r, err := xcv.Match(args[0], args[1])
 			if err != nil {
 				return err
