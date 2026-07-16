@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -12,6 +13,10 @@ import (
 )
 
 var version = "dev"
+
+// errFailed signals a failed check/validation/match: the result has already been
+// printed, so main exits 1 without an extra error line.
+var errFailed = errors.New("failed")
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -29,7 +34,9 @@ func main() {
 	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd(), newMatchCmd())
 
 	if err := rootCmd.Execute(); err != nil {
-		printErr(err.Error())
+		if !errors.Is(err, errFailed) {
+			printErr(err.Error())
+		}
 		os.Exit(1)
 	}
 }
@@ -54,8 +61,7 @@ and validate expiry, cryptographic signatures, hostname match, and chain order.
 Root CA absence is treated as informational — servers normally omit the root.
 
 Accepts: example.com, example.com:8443, https://example.com`,
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			host, p, err := xcv.ParseHostPort(args[0], port)
 			if err != nil {
@@ -67,7 +73,7 @@ Accepts: example.com, example.com:8443, https://example.com`,
 			}
 			xcv.PrintCheckResult(r)
 			if !r.Passed {
-				os.Exit(1)
+				return errFailed
 			}
 			return nil
 		},
@@ -83,8 +89,7 @@ func newShowCmd() *cobra.Command {
 		Long: `Parse a PEM file and display certificate details (subject, issuer, serial,
 validity, key usage, RFC compliance issues) for each certificate.
 No chain validation, no PASS/FAIL — information only.`,
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := xcv.Show(args[0])
 			if err != nil {
@@ -102,8 +107,7 @@ func newValidateCmd() *cobra.Command {
 		Short: "Validate a PEM certificate chain file",
 		Long: `Validate a PEM certificate chain file. Checks certificate expiry,
 cryptographic signatures, chain completeness, and physical PEM ordering.`,
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := xcv.Validate(args[0])
 			if err != nil {
@@ -111,7 +115,7 @@ cryptographic signatures, chain completeness, and physical PEM ordering.`,
 			}
 			xcv.PrintValidationResult(r)
 			if !r.Passed {
-				os.Exit(1)
+				return errFailed
 			}
 			return nil
 		},
@@ -120,11 +124,10 @@ cryptographic signatures, chain completeness, and physical PEM ordering.`,
 
 func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:          "diff <old_file> <new_file>",
-		Short:        "Compare two PEM certificate chain files",
-		Long:         `Compare two PEM certificate chain files side-by-side (old on left, new on right).`,
-		Args:         cobra.ExactArgs(2),
-		SilenceUsage: true,
+		Use:   "diff <old_file> <new_file>",
+		Short: "Compare two PEM certificate chain files",
+		Long:  `Compare two PEM certificate chain files side-by-side (old on left, new on right).`,
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := xcv.Diff(args[0], args[1])
 			if err != nil {
@@ -146,8 +149,7 @@ the certificate and which is the private key from PEM block headers.
 
 Supported key formats: PKCS#8 (BEGIN PRIVATE KEY), PKCS#1 RSA (BEGIN RSA PRIVATE KEY),
 SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.`,
-		Args:         cobra.ExactArgs(2),
-		SilenceUsage: true,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := xcv.Match(args[0], args[1])
 			if err != nil {
@@ -155,7 +157,7 @@ SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.`,
 			}
 			xcv.PrintMatchResult(r)
 			if !r.Matched {
-				os.Exit(1)
+				return errFailed
 			}
 			return nil
 		},

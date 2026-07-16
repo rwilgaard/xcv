@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -18,38 +19,66 @@ import (
 	"time"
 )
 
-func Validate(path string) (*ValidationResult, error) {
+// loadChain reads a PEM file and returns its certificates as CertDetails.
+func loadChain(path string) ([]*CertDetails, error) {
 	certs, pems, err := parseCertsFromFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in file; ensure certificates are in PEM format")
+		return nil, fmt.Errorf("no certificate blocks found in %s; ensure certificates are in PEM format", path)
 	}
+	return buildCertDetails(certs, pems), nil
+}
 
-	parsedCerts := buildCertDetails(certs, pems)
-	ordered := orderChainDetails(parsedCerts)
+// chainAnalysis bundles the checks shared by Validate and Check.
+type chainAnalysis struct {
+	Statuses     []CertStatus
+	SignatureErr error
+	Order        OrderCheckResult
+	DatesOK      bool
+	RootPresent  bool
+}
 
-	statuses := computeCertStatuses(ordered)
-	datesOK := datesAllValid(statuses)
+func analyzeChain(parsed, ordered []*CertDetails) chainAnalysis {
+	a := chainAnalysis{
+		Statuses:     computeCertStatuses(ordered),
+		SignatureErr: verifySignaturesDetails(ordered),
+		Order:        computeOrderCheck(parsed, ordered),
+		RootPresent:  hasSelfSignedRoot(ordered),
+	}
+	a.DatesOK = datesAllValid(a.Statuses)
+	return a
+}
 
-	sigErr := verifySignaturesDetails(ordered)
-	orderCheck := computeOrderCheck(parsedCerts, ordered)
+func hasSelfSignedRoot(ordered []*CertDetails) bool {
+	if len(ordered) == 0 {
+		return false
+	}
 	last := ordered[len(ordered)-1]
-	isCompleteChain := len(ordered) > 0 && last.IsSelfSigned && last.Cert.IsCA
+	return last.IsSelfSigned && last.Cert.IsCA
+}
 
-	passed := datesOK && sigErr == nil && isCompleteChain && orderCheck.Correct
+func Validate(path string) (*ValidationResult, error) {
+	parsedCerts, err := loadChain(path)
+	if err != nil {
+		return nil, err
+	}
+	ordered := orderChainDetails(parsedCerts)
+	a := analyzeChain(parsedCerts, ordered)
+
+	passed := a.DatesOK && a.SignatureErr == nil && a.RootPresent && a.Order.Correct
 	var failReasons []string
-	if !datesOK {
+	if !a.DatesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
 	}
-	if sigErr != nil {
+	if a.SignatureErr != nil {
 		failReasons = append(failReasons, "cryptographic signature verification failed")
 	}
-	if !isCompleteChain {
+	if !a.RootPresent {
 		failReasons = append(failReasons, "the chain is incomplete (missing a self-signed root certificate)")
 	}
-	if !orderCheck.Correct {
+	if !a.Order.Correct {
 		failReasons = append(failReasons, "the physical order of certificates in the file is incorrect")
 	}
 
@@ -57,10 +86,10 @@ func Validate(path string) (*ValidationResult, error) {
 		Path:            path,
 		ParsedCerts:     parsedCerts,
 		Ordered:         ordered,
-		Statuses:        statuses,
-		SignatureErr:    sigErr,
-		Order:           orderCheck,
-		IsCompleteChain: isCompleteChain,
+		Statuses:        a.Statuses,
+		SignatureErr:    a.SignatureErr,
+		Order:           a.Order,
+		IsCompleteChain: a.RootPresent,
 		Passed:          passed,
 		FailReasons:     failReasons,
 	}, nil
@@ -74,32 +103,25 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 
 	parsed := buildCertDetails(rawCerts, pems)
 	ordered := orderChainDetails(parsed)
-
-	statuses := computeCertStatuses(ordered)
-	datesOK := datesAllValid(statuses)
-
-	sigErr := verifySignaturesDetails(ordered)
-	orderCheck := computeOrderCheck(parsed, ordered)
+	a := analyzeChain(parsed, ordered)
 
 	var hostnameErr error
 	if len(ordered) > 0 {
 		hostnameErr = ordered[0].Cert.VerifyHostname(host)
 	}
 
-	rootPresent := len(ordered) > 0 && ordered[len(ordered)-1].IsSelfSigned && ordered[len(ordered)-1].Cert.IsCA
-
-	passed := datesOK && sigErr == nil && orderCheck.Correct && hostnameErr == nil
+	passed := a.DatesOK && a.SignatureErr == nil && a.Order.Correct && hostnameErr == nil
 	var failReasons []string
-	if !datesOK {
+	if !a.DatesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
 	}
-	if sigErr != nil {
+	if a.SignatureErr != nil {
 		failReasons = append(failReasons, "cryptographic signature verification failed")
 	}
 	if hostnameErr != nil {
 		failReasons = append(failReasons, fmt.Sprintf("certificate is not valid for %s", host))
 	}
-	if !orderCheck.Correct {
+	if !a.Order.Correct {
 		failReasons = append(failReasons, "certificates were presented in incorrect order by the server")
 	}
 
@@ -108,11 +130,11 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 		Port:         port,
 		Certs:        parsed,
 		Ordered:      ordered,
-		Statuses:     statuses,
-		SignatureErr: sigErr,
+		Statuses:     a.Statuses,
+		SignatureErr: a.SignatureErr,
 		HostnameErr:  hostnameErr,
-		Order:        orderCheck,
-		RootPresent:  rootPresent,
+		Order:        a.Order,
+		RootPresent:  a.RootPresent,
 		Passed:       passed,
 		FailReasons:  failReasons,
 	}, nil
@@ -120,17 +142,11 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 
 // Show parses a PEM file and returns certificate details without chain validation.
 func Show(path string) (*ShowResult, error) {
-	certs, pems, err := parseCertsFromFile(path)
+	certs, err := loadChain(path)
 	if err != nil {
 		return nil, err
 	}
-	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in file; ensure certificates are in PEM format")
-	}
-	return &ShowResult{
-		Path:  path,
-		Certs: buildCertDetails(certs, pems),
-	}, nil
+	return &ShowResult{Path: path, Certs: certs}, nil
 }
 
 // Match determines whether a private key corresponds to the public key embedded
@@ -305,24 +321,15 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 
 // Diff compares two PEM certificate chain files and returns their position-by-position comparison.
 func Diff(fileOld, fileNew string) (*DiffResult, error) {
-	certsOld, pemsOld, err := parseCertsFromFile(fileOld)
+	parsedOld, err := loadChain(fileOld)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read/parse %s: %w", fileOld, err)
+		return nil, err
 	}
-	if len(certsOld) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in %s", fileOld)
+	parsedNew, err := loadChain(fileNew)
+	if err != nil {
+		return nil, err
 	}
 
-	certsNew, pemsNew, err := parseCertsFromFile(fileNew)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read/parse %s: %w", fileNew, err)
-	}
-	if len(certsNew) == 0 {
-		return nil, fmt.Errorf("no certificate blocks found in %s", fileNew)
-	}
-
-	parsedNew := buildCertDetails(certsNew, pemsNew)
-	parsedOld := buildCertDetails(certsOld, pemsOld)
 	orderedNew := orderChainDetails(parsedNew)
 	orderedOld := orderChainDetails(parsedOld)
 
@@ -465,7 +472,7 @@ func pubKeyFingerprint(pub crypto.PublicKey) (string, error) {
 		return "", fmt.Errorf("marshal public key: %w", err)
 	}
 	sum := sha256.Sum256(der)
-	return fmt.Sprintf("%x", sum), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func datesAllValid(statuses []CertStatus) bool {

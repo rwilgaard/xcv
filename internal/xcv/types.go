@@ -12,8 +12,8 @@ type CertDetails struct {
 	Serial           string
 	NotBeforeStr     string
 	NotAfterStr      string
-	Skid             string
-	Akid             string
+	SKID             string
+	AKID             string
 	KeyUsages        []string
 	ExtKeyUsages     []string
 	ComplianceIssues []string
