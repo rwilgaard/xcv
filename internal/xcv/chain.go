@@ -40,8 +40,12 @@ func formatKeyID(id []byte) string {
 	return hex.EncodeToString(id)
 }
 
+// isSelfSigned reports whether cert is signed by its own key. Matching subject
+// and issuer alone only makes it self-issued. CheckSignatureFrom would also
+// demand the CA flag, which a self-signed leaf doesn't have.
 func isSelfSigned(cert *x509.Certificate) bool {
-	return bytes.Equal(cert.RawSubject, cert.RawIssuer)
+	return bytes.Equal(cert.RawSubject, cert.RawIssuer) &&
+		cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil
 }
 
 func complianceIssues(cert *x509.Certificate) []string {
@@ -312,7 +316,7 @@ func verifyChain(ordered []*x509.Certificate) error {
 	for i := 0; i < len(ordered)-1; i++ {
 		child, parent := ordered[i], ordered[i+1]
 		if err := child.CheckSignatureFrom(parent); err != nil {
-			return fmt.Errorf("x509: %q not signed by parent %q: %w",
+			return fmt.Errorf("x509: %q not signed by issuer %q: %w",
 				child.Subject.CommonName, parent.Subject.CommonName, err)
 		}
 	}
@@ -327,19 +331,59 @@ func verifySignaturesDetails(ordered []*CertDetails) error {
 	return verifyChain(rawCerts)
 }
 
-func getCertRoleName(index, total int, isSelfSigned, isCA bool) string {
-	if index == total-1 {
-		switch {
-		case isSelfSigned && isCA:
-			return "Root (Self-Signed)"
-		case isSelfSigned:
-			return "Leaf (Self-Signed, No CA)"
-		default:
-			return "Root/Anchor (Not Self-Signed)"
-		}
-	}
-	if index == 0 {
+type certRole int
+
+const (
+	roleLeaf certRole = iota
+	roleSelfSignedLeaf
+	roleIntermediate
+	roleRoot
+)
+
+func (r certRole) String() string {
+	switch r {
+	case roleRoot:
+		return "Root"
+	case roleIntermediate:
+		return "Intermediate"
+	case roleSelfSignedLeaf:
+		return "Leaf (Self-Signed)"
+	default:
 		return "Leaf"
 	}
-	return fmt.Sprintf("Intermediate %d", index)
+}
+
+// roleOf classifies the cert at the given chain position (0 = bottom). Certs
+// above the bottom signed the one below, so they are CAs whatever their flags
+// (X.509 v1 CAs have no extensions); the CA flag only decides the bottom cert.
+func roleOf(index int, c *CertDetails) certRole {
+	isCA := index > 0 || c.Cert.IsCA
+	switch {
+	case isCA && c.IsSelfSigned:
+		return roleRoot
+	case isCA:
+		return roleIntermediate
+	case c.IsSelfSigned:
+		return roleSelfSignedLeaf
+	default:
+		return roleLeaf
+	}
+}
+
+// intermediateNumber numbers intermediates upward from 1. Without a leaf in the
+// chain the bottom cert is itself the first intermediate.
+func intermediateNumber(index int, ordered []*CertDetails) int {
+	if ordered[0].Cert.IsCA {
+		return index + 1
+	}
+	return index
+}
+
+// getCertRoleName names the cert at index in the ordered chain.
+func getCertRoleName(index int, ordered []*CertDetails) string {
+	role := roleOf(index, ordered[index])
+	if role == roleIntermediate {
+		return fmt.Sprintf("%s %d", role, intermediateNumber(index, ordered))
+	}
+	return role.String()
 }

@@ -102,8 +102,18 @@ func renderCertBlocksSection(sb *strings.Builder, statuses []CertStatus, width i
 	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
 }
 
-func renderSigSection(sb *strings.Builder, sigErr error, width int) {
-	renderResultSection(sb, "Cryptographic Signature Verification", "Chain signatures verified successfully.", sigErr)
+// topIssuerAbsent reports whether the top of the chain was issued by a cert
+// that isn't in the chain. A self-signed top cert has no further issuer.
+func topIssuerAbsent(ordered []*CertDetails) bool {
+	return len(ordered) > 0 && !ordered[len(ordered)-1].IsSelfSigned
+}
+
+func renderSigSection(sb *strings.Builder, chainLen int, sigErr error, width int) {
+	detail := "Chain signatures verified successfully."
+	if chainLen == 1 {
+		detail = "No issuer certificate in the chain, no signatures verified."
+	}
+	renderResultSection(sb, "Cryptographic Signature Verification", detail, sigErr)
 	// Historical quirk kept for output stability: this section has a blank
 	// line before its separator, the hostname section does not.
 	fmt.Fprintf(sb, "\n%s\n\n", sepDash(width))
@@ -128,7 +138,7 @@ func renderOrderSection(sb *strings.Builder, sectionLabel, physicalLabel string,
 	fmt.Fprintf(sb, "%s\n", label(sectionLabel))
 	sb.WriteString("  Expected (Leaf → Root):\n")
 	for idx, cert := range ordered {
-		role := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
+		role := getCertRoleName(idx, ordered)
 		fmt.Fprintf(sb, "    %d. %s (%s)\n", idx+1, sBold.Render(cert.SubjectCN), role)
 	}
 	fmt.Fprintf(sb, "\n  %s:\n", physicalLabel)
@@ -151,6 +161,17 @@ func renderOrderSection(sb *strings.Builder, sectionLabel, physicalLabel string,
 	}
 }
 
+func roleStyle(r certRole) lipgloss.Style {
+	switch r {
+	case roleRoot:
+		return sCyanBold
+	case roleIntermediate:
+		return sYellowBold
+	default:
+		return sGreenBold
+	}
+}
+
 // certHeader renders the "[n] Role" heading above a certificate block.
 func certHeader(style lipgloss.Style, index int, role string) string {
 	return style.Render(fmt.Sprintf("[%d] %s", index, role))
@@ -159,15 +180,7 @@ func certHeader(style lipgloss.Style, index int, role string) string {
 func renderCertBlock(c *CertDetails, s CertStatus, idx int) string {
 	var sb strings.Builder
 
-	style := sYellowBold
-	switch {
-	case idx == 0:
-		style = sGreenBold
-	case c.IsSelfSigned && c.Cert.IsCA:
-		style = sCyanBold
-	}
-
-	fmt.Fprintf(&sb, "%s\n", certHeader(style, idx+1, s.Role))
+	fmt.Fprintf(&sb, "%s\n", certHeader(roleStyle(roleOf(idx, c)), idx+1, s.Role))
 	renderCertCommonFields(&sb, c, s.NotYetActive, s.Expired, s.DaysLeft)
 
 	return sb.String()
@@ -184,22 +197,17 @@ func renderChainTree(ordered []*CertDetails) string {
 		cert := ordered[idx]
 		indent := strings.Repeat("  ", i)
 
-		var roleLabel string
-		switch i {
-		case 0:
-			switch {
-			case cert.IsSelfSigned && cert.Cert.IsCA:
-				roleLabel = sCyanBold.Render("[Root]")
-			case cert.IsSelfSigned:
-				roleLabel = sGreenBold.Render("[Leaf*]")
-			default:
-				roleLabel = sYellowBold.Render("[Anchor]")
-			}
-		case n - 1:
-			roleLabel = sGreenBold.Render("[Leaf]")
-		default:
-			roleLabel = sYellowBold.Render(fmt.Sprintf("[Interm %d]", idx))
+		role := roleOf(idx, cert)
+		tag := "[Leaf]"
+		switch role {
+		case roleRoot:
+			tag = "[Root]"
+		case roleIntermediate:
+			tag = fmt.Sprintf("[Interm %d]", intermediateNumber(idx, ordered))
+		case roleSelfSignedLeaf:
+			tag = "[Leaf*]"
 		}
+		roleLabel := roleStyle(role).Render(tag)
 
 		connector := ""
 		if i > 0 {
@@ -276,12 +284,17 @@ func renderValidationResult(r *ValidationResult, width int) string {
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
 	renderChainStructureSection(&sb, r.Ordered, width)
 	renderCertBlocksSection(&sb, r.Statuses, width)
-	renderSigSection(&sb, r.SignatureErr, width)
+	renderSigSection(&sb, len(r.Ordered), r.SignatureErr, width)
 	renderOrderSection(&sb, "PEM File Order", "Physical order in file", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
+	// A failed result already says why; the note only qualifies a pass.
+	var footerNotes []string
+	if r.Passed && topIssuerAbsent(r.Ordered) {
+		footerNotes = append(footerNotes, sYellow.Render("Note: no root certificate in file (the top certificate's issuer was not verified)."))
+	}
 	renderPassFail(&sb, r.Passed,
-		"SUCCESS: chain is complete, valid, properly ordered, and cryptographically sound.",
+		"SUCCESS: chain is valid, properly ordered, and cryptographically sound.",
 		"FAILURE: chain validation failed.",
-		r.FailReasons, width)
+		r.FailReasons, width, footerNotes...)
 	return sb.String()
 }
 
@@ -289,19 +302,19 @@ func renderCheckResult(r *CheckResult, width int) string {
 	var sb strings.Builder
 	renderPageHeader(&sb, "TLS Certificate Check", []string{fmt.Sprintf("Host: %s:%d", r.Host, r.Port)}, width)
 	fmt.Fprintf(&sb, "Server presented %d certificate(s).\n", len(r.Certs))
-	if !r.RootPresent {
-		fmt.Fprintf(&sb, "%s\n", sYellow.Render("Note: Root CA not included in server response (normal for TLS)."))
+	if topIssuerAbsent(r.Ordered) {
+		fmt.Fprintf(&sb, "%s\n", sYellow.Render("Note: server did not send a root certificate (normal for TLS)."))
 	}
 	fmt.Fprintf(&sb, "%s\n\n", sepDash(width))
 	renderChainStructureSection(&sb, r.Ordered, width)
 	renderCertBlocksSection(&sb, r.Statuses, width)
-	renderSigSection(&sb, r.SignatureErr, width)
+	renderSigSection(&sb, len(r.Ordered), r.SignatureErr, width)
 	renderHostnameSection(&sb, r.Host, r.HostnameErr, width)
 	renderOrderSection(&sb, "Server-Presented Order", "Physical order from server", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 
 	var footerNotes []string
-	if !r.RootPresent {
-		footerNotes = append(footerNotes, sYellow.Render("Note: Root CA absent from server chain (validated against presented intermediates only)."))
+	if topIssuerAbsent(r.Ordered) {
+		footerNotes = append(footerNotes, sYellow.Render("Note: no root certificate from server (the top certificate's issuer was not verified)."))
 	}
 	renderPassFail(&sb, r.Passed,
 		"SUCCESS: certificates are valid, properly ordered, and cryptographically sound.",
@@ -318,22 +331,12 @@ func renderShowResult(r *ShowResult, width int) string {
 
 	now := time.Now().UTC()
 	for _, cert := range r.Certs {
-		style := sGreenBold
-		role := "Leaf"
-		switch {
-		case cert.IsSelfSigned && cert.Cert.IsCA:
-			style = sCyanBold
-			role = "Root (Self-Signed)"
-		case cert.Cert.IsCA:
-			style = sYellowBold
-			role = "CA"
-		case cert.IsSelfSigned:
-			role = "Leaf (Self-Signed, No CA)"
-		}
+		// show doesn't order the chain, so each cert is classified on its own.
+		role := roleOf(0, cert)
 
 		notYetActive, expired, daysLeft := certTimeStatus(cert.Cert, now)
 
-		fmt.Fprintf(&sb, "%s\n", certHeader(style, cert.Index, role))
+		fmt.Fprintf(&sb, "%s\n", certHeader(roleStyle(role), cert.Index, role.String()))
 		renderCertCommonFields(&sb, cert, notYetActive, expired, daysLeft)
 		sb.WriteString("\n")
 	}

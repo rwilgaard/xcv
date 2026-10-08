@@ -110,46 +110,168 @@ func writeKeyPEM(t *testing.T, key *ecdsa.PrivateKey) string {
 
 func TestValidate(t *testing.T) {
 	root, rootKey := makeCert(t, "Test Root CA", true, nil, nil)
+	inter, interKey := makeCert(t, "Test Intermediate CA", true, root, rootKey)
 	leaf, _ := makeCert(t, "Test Leaf", false, root, rootKey)
+	interLeaf, _ := makeCert(t, "Test Leaf", false, inter, interKey)
+	selfSignedLeaf, _ := makeCert(t, "Self-Signed Leaf", false, nil, nil)
 
 	tests := []struct {
 		name       string
 		certs      []*x509.Certificate
+		opts       ValidateOptions
 		wantPassed bool
+		wantRoot   bool
 	}{
 		{
 			name:       "valid chain leaf then root",
 			certs:      []*x509.Certificate{leaf, root},
 			wantPassed: true,
+			wantRoot:   true,
 		},
 		{
 			name:       "valid chain root then leaf (wrong order)",
 			certs:      []*x509.Certificate{root, leaf},
 			wantPassed: false, // physical order check fails
+			wantRoot:   true,
 		},
 		{
 			name:       "self-signed only",
 			certs:      []*x509.Certificate{root},
 			wantPassed: true, // self-signed root: no chain to walk, cert is structurally valid
+			wantRoot:   true,
+		},
+		{
+			name:       "leaf and intermediate without root",
+			certs:      []*x509.Certificate{interLeaf, inter},
+			wantPassed: true,
+		},
+		{
+			name:       "leaf only",
+			certs:      []*x509.Certificate{interLeaf},
+			wantPassed: true,
+		},
+		{
+			name:       "require root, root missing",
+			certs:      []*x509.Certificate{interLeaf, inter},
+			opts:       ValidateOptions{RequireRoot: true},
+			wantPassed: false,
+		},
+		{
+			name:       "self-signed leaf",
+			certs:      []*x509.Certificate{selfSignedLeaf},
+			wantPassed: true,
+		},
+		{
+			name:       "require root, self-signed leaf is not a root",
+			certs:      []*x509.Certificate{selfSignedLeaf},
+			opts:       ValidateOptions{RequireRoot: true},
+			wantPassed: false,
+		},
+		{
+			name:       "require root, root present",
+			certs:      []*x509.Certificate{interLeaf, inter, root},
+			opts:       ValidateOptions{RequireRoot: true},
+			wantPassed: true,
+			wantRoot:   true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePEM(t, tc.certs)
-			r, err := Validate(path)
+			r, err := Validate(path, tc.opts)
 			if err != nil {
 				t.Fatalf("Validate returned error: %v", err)
 			}
 			if r.Passed != tc.wantPassed {
 				t.Errorf("Passed = %v, want %v; FailReasons = %v", r.Passed, tc.wantPassed, r.FailReasons)
 			}
+			if r.RootPresent != tc.wantRoot {
+				t.Errorf("RootPresent = %v, want %v", r.RootPresent, tc.wantRoot)
+			}
 		})
 	}
 }
 
+func TestRenderValidationResult_Notes(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	inter, interKey := makeCert(t, "Intermediate CA", true, root, rootKey)
+	leaf, _ := makeCert(t, "Leaf", false, inter, interKey)
+	selfSignedLeaf, _ := makeCert(t, "Self-Signed Leaf", false, nil, nil)
+	unrelated, _ := makeCert(t, "Unrelated", true, nil, nil)
+
+	const (
+		rootNote = "Note: no root certificate in file"
+		noIssuer = "No issuer certificate in the chain"
+	)
+	tests := []struct {
+		name         string
+		certs        []*x509.Certificate
+		opts         ValidateOptions
+		wantRootNote bool
+		wantNoIssuer bool
+	}{
+		{name: "full chain", certs: []*x509.Certificate{leaf, inter, root}},
+		{name: "no root", certs: []*x509.Certificate{leaf, inter}, wantRootNote: true},
+		{name: "leaf only", certs: []*x509.Certificate{leaf}, wantRootNote: true, wantNoIssuer: true},
+		{name: "self-signed leaf", certs: []*x509.Certificate{selfSignedLeaf}, wantNoIssuer: true},
+		// Fails on order, so the reasons carry it; the chain is still one cert long.
+		{name: "leaf with unrelated cert", certs: []*x509.Certificate{leaf, unrelated}, wantNoIssuer: true},
+		{name: "require root, no root", certs: []*x509.Certificate{leaf, inter}, opts: ValidateOptions{RequireRoot: true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Validate(writePEM(t, tc.certs), tc.opts)
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			out := stripANSI(renderValidationResult(r, 80))
+			if got := strings.Contains(out, rootNote); got != tc.wantRootNote {
+				t.Errorf("root note present = %v, want %v", got, tc.wantRootNote)
+			}
+			if got := strings.Contains(out, noIssuer); got != tc.wantNoIssuer {
+				t.Errorf("no-issuer detail present = %v, want %v", got, tc.wantNoIssuer)
+			}
+		})
+	}
+}
+
+func TestIsSelfSigned(t *testing.T) {
+	root, rootKey := makeCert(t, "Same Name", true, nil, nil)
+	// Same subject and issuer as root, but signed by root's key rather than its own.
+	selfIssued, _ := makeCert(t, "Same Name", true, root, rootKey)
+	selfSignedLeaf, _ := makeCert(t, "Self-Signed Leaf", false, nil, nil)
+	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
+
+	tests := []struct {
+		name string
+		cert *x509.Certificate
+		want bool
+	}{
+		{"root", root, true},
+		{"self-signed leaf", selfSignedLeaf, true},
+		{"self-issued with another key", selfIssued, false},
+		{"leaf", leaf, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSelfSigned(tc.cert); got != tc.want {
+				t.Errorf("isSelfSigned = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	r, err := Validate(writePEM(t, []*x509.Certificate{selfIssued}), ValidateOptions{RequireRoot: true})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if r.RootPresent || r.Passed {
+		t.Errorf("self-issued cert accepted as root: RootPresent=%v Passed=%v", r.RootPresent, r.Passed)
+	}
+}
+
 func TestValidate_NoSuchFile(t *testing.T) {
-	_, err := Validate(filepath.Join(t.TempDir(), "nonexistent.pem"))
+	_, err := Validate(filepath.Join(t.TempDir(), "nonexistent.pem"), ValidateOptions{})
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -163,7 +285,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close temp file: %v", err)
 	}
-	_, err = Validate(f.Name())
+	_, err = Validate(f.Name(), ValidateOptions{})
 	if err == nil {
 		t.Fatal("expected error for empty PEM file, got nil")
 	}
@@ -173,7 +295,7 @@ func TestStripANSI(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 	path := writePEM(t, []*x509.Certificate{leaf, root})
-	r, err := Validate(path)
+	r, err := Validate(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -210,7 +332,7 @@ func TestValidate_ExpiredCert(t *testing.T) {
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}, nil, nil)
 	path := writePEM(t, []*x509.Certificate{cert})
-	r, err := Validate(path)
+	r, err := Validate(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -228,7 +350,7 @@ func TestValidate_ExtraUnrelatedCert(t *testing.T) {
 	unrelated, _ := makeCert(t, "Unrelated", true, nil, nil)
 	// file has leaf + root + unrelated — order check should fail
 	path := writePEM(t, []*x509.Certificate{leaf, root, unrelated})
-	r, err := Validate(path)
+	r, err := Validate(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -521,28 +643,35 @@ func TestMatch(t *testing.T) {
 }
 
 func TestGetCertRoleName(t *testing.T) {
+	cert := func(selfSigned, isCA bool) *CertDetails {
+		return &CertDetails{Cert: &x509.Certificate{IsCA: isCA}, IsSelfSigned: selfSigned}
+	}
+	leaf := cert(false, false)
+	inter := cert(false, true)
+	root := cert(true, true)
+	v1Inter := cert(false, false) // X.509 v1: no extensions, so no CA flag
+	v1Root := cert(true, false)
+
 	tests := []struct {
-		name         string
-		index, total int
-		isSelfSigned bool
-		isCA         bool
-		want         string
+		name  string
+		chain []*CertDetails
+		want  []string
 	}{
-		{"single self-signed CA", 0, 1, true, true, "Root (Self-Signed)"},
-		{"single self-signed non-CA", 0, 1, true, false, "Leaf (Self-Signed, No CA)"},
-		{"single anchor (not self-signed)", 0, 1, false, false, "Root/Anchor (Not Self-Signed)"},
-		{"leaf in chain", 0, 3, false, false, "Leaf"},
-		{"intermediate", 1, 3, false, true, "Intermediate 1"},
-		{"root in full chain", 2, 3, true, true, "Root (Self-Signed)"},
-		{"anchor in full chain", 2, 3, false, true, "Root/Anchor (Not Self-Signed)"},
+		{"full chain", []*CertDetails{leaf, inter, inter, root}, []string{"Leaf", "Intermediate 1", "Intermediate 2", "Root"}},
+		{"no root", []*CertDetails{leaf, inter, inter}, []string{"Leaf", "Intermediate 1", "Intermediate 2"}},
+		{"leaf only", []*CertDetails{leaf}, []string{"Leaf"}},
+		{"self-signed leaf", []*CertDetails{cert(true, false)}, []string{"Leaf (Self-Signed)"}},
+		{"root only", []*CertDetails{root}, []string{"Root"}},
+		{"no leaf", []*CertDetails{inter, inter, root}, []string{"Intermediate 1", "Intermediate 2", "Root"}},
+		{"v1 CAs", []*CertDetails{leaf, v1Inter, v1Root}, []string{"Leaf", "Intermediate 1", "Root"}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := getCertRoleName(tc.index, tc.total, tc.isSelfSigned, tc.isCA)
-			if got != tc.want {
-				t.Errorf("getCertRoleName(%d,%d,%v,%v) = %q, want %q",
-					tc.index, tc.total, tc.isSelfSigned, tc.isCA, got, tc.want)
+			for i, want := range tc.want {
+				if got := getCertRoleName(i, tc.chain); got != want {
+					t.Errorf("position %d = %q, want %q", i, got, want)
+				}
 			}
 		})
 	}
