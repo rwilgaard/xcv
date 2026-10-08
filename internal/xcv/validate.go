@@ -62,11 +62,19 @@ func hasSelfSignedRoot(ordered []*CertDetails) bool {
 	if len(ordered) == 0 {
 		return false
 	}
-	last := ordered[len(ordered)-1]
-	return last.IsSelfSigned && last.Cert.IsCA
+	top := len(ordered) - 1
+	return roleOf(top, ordered[top]) == roleRoot
 }
 
-func Validate(path string) (*ValidationResult, error) {
+// ValidateOptions tunes Validate.
+type ValidateOptions struct {
+	// RequireRoot fails validation when the file has no self-signed root.
+	RequireRoot bool
+}
+
+// Validate checks the chain in a PEM file: dates, signatures and file order.
+// A missing root only fails the result when opts.RequireRoot is set.
+func Validate(path string, opts ValidateOptions) (*ValidationResult, error) {
 	parsedCerts, err := loadChain(path)
 	if err != nil {
 		return nil, err
@@ -74,7 +82,8 @@ func Validate(path string) (*ValidationResult, error) {
 	ordered := orderChainDetails(parsedCerts)
 	a := analyzeChain(parsedCerts, ordered)
 
-	passed := a.DatesOK && a.SignatureErr == nil && a.RootPresent && a.Order.Correct
+	rootOK := a.RootPresent || !opts.RequireRoot
+	passed := a.DatesOK && a.SignatureErr == nil && rootOK && a.Order.Correct
 	var failReasons []string
 	if !a.DatesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
@@ -82,23 +91,23 @@ func Validate(path string) (*ValidationResult, error) {
 	if a.SignatureErr != nil {
 		failReasons = append(failReasons, "cryptographic signature verification failed")
 	}
-	if !a.RootPresent {
-		failReasons = append(failReasons, "the chain is incomplete (missing a self-signed root certificate)")
+	if !rootOK {
+		failReasons = append(failReasons, "the chain is incomplete (no root certificate in the file)")
 	}
 	if !a.Order.Correct {
 		failReasons = append(failReasons, "the physical order of certificates in the file is incorrect")
 	}
 
 	return &ValidationResult{
-		Path:            displayName(path),
-		ParsedCerts:     parsedCerts,
-		Ordered:         ordered,
-		Statuses:        a.Statuses,
-		SignatureErr:    a.SignatureErr,
-		Order:           a.Order,
-		IsCompleteChain: a.RootPresent,
-		Passed:          passed,
-		FailReasons:     failReasons,
+		Path:         displayName(path),
+		ParsedCerts:  parsedCerts,
+		Ordered:      ordered,
+		Statuses:     a.Statuses,
+		SignatureErr: a.SignatureErr,
+		Order:        a.Order,
+		RootPresent:  a.RootPresent,
+		Passed:       passed,
+		FailReasons:  failReasons,
 	}, nil
 }
 
@@ -263,7 +272,7 @@ func computeCertStatuses(ordered []*CertDetails) []CertStatus {
 	for idx, cert := range ordered {
 		s := CertStatus{
 			Cert: cert,
-			Role: getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA),
+			Role: getCertRoleName(idx, ordered),
 		}
 		s.NotYetActive, s.Expired, s.DaysLeft = certTimeStatus(cert.Cert, now)
 		s.Active = !s.NotYetActive && !s.Expired
@@ -287,7 +296,7 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 		entry := PhysicalEntry{Cert: cert, LogicalIndex: -1}
 		if ok {
 			entry.LogicalIndex = logicalIdx
-			entry.Role = getCertRoleName(logicalIdx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
+			entry.Role = getCertRoleName(logicalIdx, ordered)
 		} else {
 			result.Correct = false
 			result.Reasons = append(result.Reasons, fmt.Sprintf(
@@ -314,7 +323,7 @@ func computeOrderCheck(parsedCerts, ordered []*CertDetails) OrderCheckResult {
 			phys := parsedCerts[idx]
 			if cert.Fingerprint != phys.Fingerprint {
 				result.Correct = false
-				expectedRole := getCertRoleName(idx, len(ordered), cert.IsSelfSigned, cert.Cert.IsCA)
+				expectedRole := getCertRoleName(idx, ordered)
 				result.Reasons = append(result.Reasons, fmt.Sprintf(
 					"Positional mismatch at index %d. Expected CN=%s (%s), but found CN=%s.",
 					idx+1, cert.SubjectCN, expectedRole, phys.SubjectCN,
@@ -361,11 +370,11 @@ func computePositions(orderedNew, orderedOld []*CertDetails) []PositionResult {
 
 		if idx < len(orderedNew) {
 			certNew = orderedNew[idx]
-			roleNew = getCertRoleName(idx, len(orderedNew), certNew.IsSelfSigned, certNew.Cert.IsCA)
+			roleNew = getCertRoleName(idx, orderedNew)
 		}
 		if idx < len(orderedOld) {
 			certOld = orderedOld[idx]
-			roleOld = getCertRoleName(idx, len(orderedOld), certOld.IsSelfSigned, certOld.Cert.IsCA)
+			roleOld = getCertRoleName(idx, orderedOld)
 		}
 
 		p := PositionResult{Idx: idx, New: certNew, Old: certOld, RoleNew: roleNew, RoleOld: roleOld}

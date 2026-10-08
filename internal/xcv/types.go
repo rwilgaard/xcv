@@ -44,14 +44,14 @@ type OrderCheckResult struct {
 }
 
 type ValidationResult struct {
-	Path            string
-	ParsedCerts     []*CertDetails
-	Ordered         []*CertDetails
-	Statuses        []CertStatus
-	SignatureErr    error
-	Order           OrderCheckResult
-	IsCompleteChain bool
-	Passed          bool
+	Path         string
+	ParsedCerts  []*CertDetails
+	Ordered      []*CertDetails
+	Statuses     []CertStatus
+	SignatureErr error
+	Order        OrderCheckResult
+	RootPresent  bool
+	Passed       bool
 	// FailReasons lists human-readable reasons when Passed == false.
 	FailReasons []string
 }

@@ -63,7 +63,9 @@ xcv check https://example.com
 xcv check example.com --port 8443
 ```
 
-Checks expiry, signatures, hostname match, and the order the server presented. Missing root CA is informational — servers normally don't send it. Connections time out after 10 seconds.
+Checks expiry, signatures, hostname match, and the order the server presented. A missing root certificate is informational — servers normally don't send it. Connections time out after 10 seconds.
+
+Roles come from chain structure, not names: a cross-signed root (e.g. "GTS Root R4" issued by GlobalSign) is not self-signed, so it shows as an intermediate.
 
 ---
 
@@ -75,7 +77,11 @@ Validate a PEM certificate chain file:
 xcv validate cert_chain.pem
 ```
 
-Checks the chain is complete, signatures are valid, nothing is expired, certs are in the right order, and RFC 5280 is satisfied.
+Checks signatures are valid, nothing is expired, certs are in the right order, and RFC 5280 is satisfied. A missing root certificate is informational — most bundles don't ship it. Pass `--require-root` to fail without one:
+
+```bash
+xcv validate --require-root full_chain.pem
+```
 
 Read from stdin with `-`, or pipe directly into `validate`/`show`:
 
@@ -117,7 +123,7 @@ Verify a certificate and private key correspond:
 xcv match cert.pem key.pem
 ```
 
-Works regardless of argument order — xcv detects which file is the cert and which is the key.
+Works regardless of argument order — xcv detects which file is the cert and which is the key. If the cert file holds a chain, the key is matched against the leaf.
 
 ---
 

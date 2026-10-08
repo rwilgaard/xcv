@@ -83,8 +83,9 @@ func newCheckCmd() *cobra.Command {
 		Use:   "check <host[:port]>",
 		Short: "Fetch and validate TLS certificates from a live host",
 		Long: `Connect to a host over TLS, retrieve the presented certificate chain,
-and validate expiry, cryptographic signatures, hostname match, and chain order.
-Root CA absence is treated as informational — servers normally omit the root.
+and validate expiry, cryptographic signatures, hostname match, and chain order
+(leaf, then intermediates). A missing root certificate is informational —
+servers normally don't send it.
 
 Accepts: example.com, example.com:8443, https://example.com`,
 		Args: cobra.ExactArgs(1),
@@ -134,11 +135,14 @@ Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 }
 
 func newValidateCmd() *cobra.Command {
-	return &cobra.Command{
+	var opts xcv.ValidateOptions
+	cmd := &cobra.Command{
 		Use:   "validate [file]",
 		Short: "Validate a PEM certificate chain file",
 		Long: `Validate a PEM certificate chain file. Checks certificate expiry,
-cryptographic signatures, chain completeness, and physical PEM ordering.
+cryptographic signatures, and physical PEM ordering (leaf, then intermediates,
+then root). A missing root certificate is informational unless --require-root
+is set.
 
 Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 		Args: cobra.MaximumNArgs(1),
@@ -147,7 +151,7 @@ Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 			if err != nil {
 				return err
 			}
-			r, err := xcv.Validate(path)
+			r, err := xcv.Validate(path, opts)
 			if err != nil {
 				return err
 			}
@@ -158,6 +162,8 @@ Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&opts.RequireRoot, "require-root", false, "Fail if the file has no root certificate")
+	return cmd
 }
 
 func newDiffCmd() *cobra.Command {
@@ -192,6 +198,7 @@ the certificate and which is the private key from PEM block headers.
 
 Supported key formats: PKCS#8 (BEGIN PRIVATE KEY), PKCS#1 RSA (BEGIN RSA PRIVATE KEY),
 SEC1 EC (BEGIN EC PRIVATE KEY). Key types: RSA, ECDSA, Ed25519.
+If the certificate file holds a chain, the key is matched against the leaf.
 
 Use '-' to read one side from stdin.`,
 		Args: cobra.ExactArgs(2),
