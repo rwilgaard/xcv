@@ -31,7 +31,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoPager, "no-pager", false, "Print directly to stdout instead of opening a pager")
 	rootCmd.PersistentFlags().BoolVar(&xcv.Quiet, "quiet", false, "Suppress all output; rely on exit codes only")
 
-	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd(), newMatchCmd())
+	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd(), newMatchCmd(), newReorderCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		if !errors.Is(err, errFailed) {
@@ -217,4 +217,41 @@ Use '-' to read one side from stdin.`,
 			return nil
 		},
 	}
+}
+
+func newReorderCmd() *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:   "reorder [file]",
+		Short: "Rewrite a PEM chain in Leaf → Intermediates → Root order",
+		Long: `Sort the certificates in a PEM file into chain order (leaf, then
+intermediates, then root) and write the result to stdout, or to a file with
+--output. Certificates that are not part of the chain, and duplicates, are
+dropped with a note on stderr. The input file is not changed unless it is
+also the --output target.
+
+Use '-' to read from stdin; with no argument, reads stdin when piped.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveInput(args)
+			if err != nil {
+				return err
+			}
+			r, err := xcv.Reorder(path)
+			if err != nil {
+				return err
+			}
+			if output == "" || output == "-" {
+				if _, err := os.Stdout.Write(r.PEM()); err != nil {
+					return err
+				}
+			} else if err := os.WriteFile(output, r.PEM(), 0o644); err != nil {
+				return err
+			}
+			xcv.PrintReorderNotes(r)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Write to this file instead of stdout")
+	return cmd
 }

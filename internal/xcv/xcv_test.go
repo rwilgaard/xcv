@@ -878,3 +878,58 @@ func TestReadInput(t *testing.T) {
 		}
 	})
 }
+
+func TestReorder(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	inter, interKey := makeCert(t, "Intermediate CA", true, root, rootKey)
+	leaf, _ := makeCert(t, "Leaf", false, inter, interKey)
+	unrelated, _ := makeCert(t, "Unrelated", true, nil, nil)
+
+	tests := []struct {
+		name        string
+		file        []*x509.Certificate
+		wantDropped []string
+	}{
+		{"already ordered", []*x509.Certificate{leaf, inter, root}, nil},
+		{"reversed", []*x509.Certificate{root, inter, leaf}, nil},
+		{"shuffled", []*x509.Certificate{inter, root, leaf}, nil},
+		{"unrelated cert", []*x509.Certificate{unrelated, root, leaf, inter}, []string{"Unrelated"}},
+		{"duplicate", []*x509.Certificate{inter, leaf, inter, root}, []string{"Intermediate CA"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := Reorder(writePEM(t, tt.file))
+			if err != nil {
+				t.Fatalf("Reorder: %v", err)
+			}
+			var dropped []string
+			for _, c := range r.Dropped {
+				dropped = append(dropped, c.SubjectCN)
+			}
+			if !slices.Equal(dropped, tt.wantDropped) {
+				t.Errorf("dropped = %v, want %v", dropped, tt.wantDropped)
+			}
+
+			// The output must parse back as a correctly ordered, passing chain.
+			out := filepath.Join(t.TempDir(), "out.pem")
+			if err := os.WriteFile(out, r.PEM(), 0o600); err != nil {
+				t.Fatalf("write output: %v", err)
+			}
+			v, err := Validate(out, ValidateOptions{RequireRoot: true})
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if !v.Passed {
+				t.Errorf("reordered chain failed validation: %v", v.FailReasons)
+			}
+			var got []string
+			for _, c := range v.ParsedCerts {
+				got = append(got, c.SubjectCN)
+			}
+			want := []string{"Leaf", "Intermediate CA", "Root CA"}
+			if !slices.Equal(got, want) {
+				t.Errorf("output order = %v, want %v", got, want)
+			}
+		})
+	}
+}

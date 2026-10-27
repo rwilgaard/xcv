@@ -117,3 +117,12 @@ type MatchResult struct {
 	KeyPubKey   string // hex SHA-256 of PKIX-marshaled key's public key
 	Matched     bool
 }
+
+// ReorderResult holds a PEM file's chain in Leaf → Intermediates → Root order.
+type ReorderResult struct {
+	Path    string
+	Ordered []*CertDetails
+	// Dropped lists certificates in the file that are not part of the chain,
+	// including duplicates.
+	Dropped []*CertDetails
+}
