@@ -2,6 +2,7 @@ package xcv
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -430,4 +431,24 @@ func renderMatchResult(r *MatchResult, width int) string {
 
 func PrintMatchResult(r *MatchResult) {
 	display(func(w int) string { return renderMatchResult(r, w) })
+}
+
+// PrintReorderNotes reports dropped certificates on stderr, so stdout stays a
+// clean PEM bundle.
+func PrintReorderNotes(r *ReorderResult) {
+	if Quiet || len(r.Dropped) == 0 {
+		return
+	}
+	names := make([]string, len(r.Dropped))
+	for i, c := range r.Dropped {
+		names[i] = c.SubjectDN
+		if c.SubjectCN != "" {
+			names[i] = c.SubjectCN
+		}
+	}
+	msg := fmt.Sprintf("Note: dropped %d certificate(s) not in the chain: %s", len(names), strings.Join(names, ", "))
+	if !NoColor {
+		msg = sYellow.Render(msg)
+	}
+	fmt.Fprintln(os.Stderr, msg)
 }

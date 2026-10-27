@@ -11,6 +11,7 @@ Works on macOS, Linux, and Windows.
 - Detect RFC 5280 violations and show key usage per certificate
 - Compare two bundles side-by-side to inspect what changed between renewals
 - Verify a private key corresponds to a certificate's public key
+- Rewrite a bundle in the correct chain order
 
 ## Installation
 
@@ -127,6 +128,19 @@ Works regardless of argument order — xcv detects which file is the cert and wh
 
 ---
 
+### 6. Chain Reorder
+
+Rewrite a PEM bundle in chain order (`Leaf → Intermediates → Root`):
+
+```bash
+xcv reorder bundle.pem > fixed.pem
+xcv reorder bundle.pem -o bundle.pem   # in place
+```
+
+Certificates that aren't part of the chain, and duplicates, are dropped with a note on stderr. Stdout only ever gets PEM, so it's safe to pipe into `xcv validate`.
+
+---
+
 ### Subcommand help
 
 ```bash
@@ -135,6 +149,7 @@ xcv validate --help
 xcv show --help
 xcv diff --help
 xcv match --help
+xcv reorder --help
 ```
 
 ### Shell completions

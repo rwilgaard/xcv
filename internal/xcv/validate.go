@@ -111,6 +111,32 @@ func Validate(path string, opts ValidateOptions) (*ValidationResult, error) {
 	}, nil
 }
 
+// Reorder sorts the chain in a PEM file into Leaf → Intermediates → Root.
+// Certificates outside the chain are reported in Dropped.
+func Reorder(path string) (*ReorderResult, error) {
+	parsed, err := loadChain(path)
+	if err != nil {
+		return nil, err
+	}
+	ordered := orderChainDetails(parsed)
+	var dropped []*CertDetails
+	for _, c := range parsed {
+		if !slices.Contains(ordered, c) {
+			dropped = append(dropped, c)
+		}
+	}
+	return &ReorderResult{Path: displayName(path), Ordered: ordered, Dropped: dropped}, nil
+}
+
+// PEM returns the ordered chain as a PEM bundle.
+func (r *ReorderResult) PEM() []byte {
+	var b []byte
+	for _, c := range r.Ordered {
+		b = append(b, c.RawPEM...)
+	}
+	return b
+}
+
 func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 	rawCerts, pems, err := fetchCertsFromTLS(ctx, host, port)
 	if err != nil {
