@@ -237,10 +237,10 @@ func buildCertDetails(certs []*x509.Certificate, pems []string) []*CertDetails {
 	return details
 }
 
-func findLeafDetails(certs []*CertDetails) *CertDetails {
-	if len(certs) == 0 {
-		return nil
-	}
+// leafCandidates returns the certs that sign no other cert in the set, or the
+// first cert when every cert signs another (a cycle).
+func leafCandidates(certs []*CertDetails) []*CertDetails {
+	var leaves []*CertDetails
 	for _, cert := range certs {
 		isIssuer := false
 		for _, other := range certs {
@@ -253,10 +253,13 @@ func findLeafDetails(certs []*CertDetails) *CertDetails {
 			}
 		}
 		if !isIssuer {
-			return cert
+			leaves = append(leaves, cert)
 		}
 	}
-	return certs[0]
+	if len(leaves) == 0 {
+		return certs[:1]
+	}
+	return leaves
 }
 
 func findParentDetails(cert *CertDetails, pool []*CertDetails) *CertDetails {
@@ -280,20 +283,29 @@ func findParentDetails(cert *CertDetails, pool []*CertDetails) *CertDetails {
 	return nil
 }
 
+// orderChainDetails returns the longest chain in the set, leaf first. A stray
+// self-signed cert also signs no others, so every leaf candidate is walked.
 func orderChainDetails(certs []*CertDetails) []*CertDetails {
 	if len(certs) == 0 {
 		return nil
 	}
-	leaf := findLeafDetails(certs)
+	var best []*CertDetails
+	for _, leaf := range leafCandidates(certs) {
+		if chain := chainFrom(leaf, certs); len(chain) > len(best) {
+			best = chain
+		}
+	}
+	return best
+}
+
+// chainFrom walks issuers up from leaf until a self-signed cert, a missing
+// parent, or a cycle.
+func chainFrom(leaf *CertDetails, certs []*CertDetails) []*CertDetails {
 	ordered := []*CertDetails{leaf}
 	current := leaf
-
 	for {
 		parent := findParentDetails(current, certs)
-		if parent == nil {
-			break
-		}
-		if slices.Contains(ordered, parent) {
+		if parent == nil || slices.Contains(ordered, parent) {
 			break
 		}
 		ordered = append(ordered, parent)
