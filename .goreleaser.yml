@@ -57,6 +57,28 @@ nix:
       branch: main
       token: "{{ .Env.NIX_PACKAGES_TOKEN }}"
 
+homebrew_casks:
+  - name: xcv
+    ids: [xcv]
+    binaries: [xcv]
+    homepage: "https://github.com/rwilgaard/xcv"
+    description: "CLI tool for inspecting, validating, and comparing X.509 certificate chains"
+    license: "MIT"
+    generate_completions_from_executable:
+      shell_parameter_format: cobra
+      shells: [bash, zsh, fish]
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/xcv"]
+          end
+    repository:
+      owner: rwilgaard
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+
 changelog:
   sort: asc
   filters:
