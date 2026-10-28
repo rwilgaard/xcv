@@ -72,7 +72,9 @@ xcv check https://example.com
 xcv check example.com --port 8443
 ```
 
-Checks expiry, signatures, hostname match, and the order the server presented. A missing root certificate is informational — servers normally don't send it. Connections time out after 10 seconds.
+Checks expiry, signatures, hostname match, completeness, and the order the server presented. A missing root certificate is informational — servers normally don't send it. Connections time out after 10 seconds.
+
+A server that sends only its leaf certificate fails when the leaf's issuer is an intermediate. xcv fetches the issuer from the certificate's AIA URL to tell an intermediate from a root, and prints the URL so you can add it. Browsers often fetch missing intermediates themselves, so a site can look fine in Chrome and still break curl, Java, and mobile clients.
 
 Roles come from chain structure, not names: a cross-signed root (e.g. "GTS Root R4" issued by GlobalSign) is not self-signed, so it shows as an intermediate.
 
@@ -91,6 +93,8 @@ Checks signatures are valid, nothing is expired, certs are in the right order, a
 ```bash
 xcv validate --require-root full_chain.pem
 ```
+
+Like `check`, a leaf-only file fails when its issuer is an intermediate. This fetches the issuer over AIA; pass `--offline` to skip the fetch (the result is then a warning).
 
 Read from stdin with `-`, or pipe directly into `validate`/`show`:
 

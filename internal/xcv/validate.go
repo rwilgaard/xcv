@@ -45,14 +45,16 @@ type chainAnalysis struct {
 	Order        OrderCheckResult
 	DatesOK      bool
 	RootPresent  bool
+	Completeness CompletenessCheck
 }
 
-func analyzeChain(parsed, ordered []*CertDetails) chainAnalysis {
+func analyzeChain(ctx context.Context, parsed, ordered []*CertDetails, offline bool) chainAnalysis {
 	a := chainAnalysis{
 		Statuses:     computeCertStatuses(ordered),
 		SignatureErr: verifySignaturesDetails(ordered),
 		Order:        computeOrderCheck(parsed, ordered),
 		RootPresent:  hasSelfSignedRoot(ordered),
+		Completeness: checkCompleteness(ctx, ordered, offline),
 	}
 	a.DatesOK = datesAllValid(a.Statuses)
 	return a
@@ -70,20 +72,25 @@ func hasSelfSignedRoot(ordered []*CertDetails) bool {
 type ValidateOptions struct {
 	// RequireRoot fails validation when the file has no self-signed root.
 	RequireRoot bool
+	// Offline skips the AIA issuer fetch, so a missing intermediate can't be
+	// told apart from a missing root.
+	Offline bool
 }
 
-// Validate checks the chain in a PEM file: dates, signatures and file order.
-// A missing root only fails the result when opts.RequireRoot is set.
-func Validate(path string, opts ValidateOptions) (*ValidationResult, error) {
+// Validate checks the chain in a PEM file: dates, signatures, completeness
+// and file order. A missing root only fails the result when opts.RequireRoot
+// is set; a missing intermediate always fails.
+func Validate(ctx context.Context, path string, opts ValidateOptions) (*ValidationResult, error) {
 	parsedCerts, err := loadChain(path)
 	if err != nil {
 		return nil, err
 	}
 	ordered := orderChainDetails(parsedCerts)
-	a := analyzeChain(parsedCerts, ordered)
+	a := analyzeChain(ctx, parsedCerts, ordered, opts.Offline)
 
 	rootOK := a.RootPresent || !opts.RequireRoot
-	passed := a.DatesOK && a.SignatureErr == nil && rootOK && a.Order.Correct
+	complete := a.Completeness.Status != ChainIncomplete
+	passed := a.DatesOK && a.SignatureErr == nil && rootOK && complete && a.Order.Correct
 	var failReasons []string
 	if !a.DatesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
@@ -93,6 +100,9 @@ func Validate(path string, opts ValidateOptions) (*ValidationResult, error) {
 	}
 	if !rootOK {
 		failReasons = append(failReasons, "the chain is incomplete (no root certificate in the file)")
+	}
+	if !complete {
+		failReasons = append(failReasons, "an intermediate certificate is missing from the file")
 	}
 	if !a.Order.Correct {
 		failReasons = append(failReasons, "the physical order of certificates in the file is incorrect")
@@ -105,6 +115,7 @@ func Validate(path string, opts ValidateOptions) (*ValidationResult, error) {
 		Statuses:     a.Statuses,
 		SignatureErr: a.SignatureErr,
 		Order:        a.Order,
+		Completeness: a.Completeness,
 		RootPresent:  a.RootPresent,
 		Passed:       passed,
 		FailReasons:  failReasons,
@@ -137,6 +148,8 @@ func (r *ReorderResult) PEM() []byte {
 	return b
 }
 
+// Check fetches a host's chain and checks dates, signatures, hostname,
+// completeness and presented order.
 func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 	rawCerts, pems, err := fetchCertsFromTLS(ctx, host, port)
 	if err != nil {
@@ -145,14 +158,15 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 
 	parsed := buildCertDetails(rawCerts, pems)
 	ordered := orderChainDetails(parsed)
-	a := analyzeChain(parsed, ordered)
+	a := analyzeChain(ctx, parsed, ordered, false)
 
 	var hostnameErr error
 	if len(ordered) > 0 {
 		hostnameErr = ordered[0].Cert.VerifyHostname(host)
 	}
 
-	passed := a.DatesOK && a.SignatureErr == nil && a.Order.Correct && hostnameErr == nil
+	complete := a.Completeness.Status != ChainIncomplete
+	passed := a.DatesOK && a.SignatureErr == nil && a.Order.Correct && hostnameErr == nil && complete
 	var failReasons []string
 	if !a.DatesOK {
 		failReasons = append(failReasons, "one or more certificates are expired or not yet active")
@@ -162,6 +176,9 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 	}
 	if hostnameErr != nil {
 		failReasons = append(failReasons, fmt.Sprintf("certificate is not valid for %s", host))
+	}
+	if !complete {
+		failReasons = append(failReasons, "the server did not send an intermediate certificate")
 	}
 	if !a.Order.Correct {
 		failReasons = append(failReasons, "certificates were presented in incorrect order by the server")
@@ -176,6 +193,7 @@ func Check(ctx context.Context, host string, port int) (*CheckResult, error) {
 		SignatureErr: a.SignatureErr,
 		HostnameErr:  hostnameErr,
 		Order:        a.Order,
+		Completeness: a.Completeness,
 		RootPresent:  a.RootPresent,
 		Passed:       passed,
 		FailReasons:  failReasons,

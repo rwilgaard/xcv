@@ -83,9 +83,11 @@ func newCheckCmd() *cobra.Command {
 		Use:   "check <host[:port]>",
 		Short: "Fetch and validate TLS certificates from a live host",
 		Long: `Connect to a host over TLS, retrieve the presented certificate chain,
-and validate expiry, cryptographic signatures, hostname match, and chain order
-(leaf, then intermediates). A missing root certificate is informational —
-servers normally don't send it.
+and validate expiry, cryptographic signatures, hostname match, chain order
+(leaf, then intermediates), and completeness. A missing root certificate is
+informational — servers normally don't send it — but a missing intermediate
+fails. The top certificate's issuer is fetched from its AIA URL to tell the
+two apart.
 
 Accepts: example.com, example.com:8443, https://example.com`,
 		Args: cobra.ExactArgs(1),
@@ -140,9 +142,10 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate [file]",
 		Short: "Validate a PEM certificate chain file",
 		Long: `Validate a PEM certificate chain file. Checks certificate expiry,
-cryptographic signatures, and physical PEM ordering (leaf, then intermediates,
-then root). A missing root certificate is informational unless --require-root
-is set.
+cryptographic signatures, completeness, and physical PEM ordering (leaf, then
+intermediates, then root). A missing root certificate is informational unless
+--require-root is set. A missing intermediate fails; it's detected by fetching
+the top certificate's issuer from its AIA URL, which --offline skips.
 
 Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 		Args: cobra.MaximumNArgs(1),
@@ -151,7 +154,7 @@ Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 			if err != nil {
 				return err
 			}
-			r, err := xcv.Validate(path, opts)
+			r, err := xcv.Validate(cmd.Context(), path, opts)
 			if err != nil {
 				return err
 			}
@@ -163,6 +166,7 @@ Use '-' to read from stdin; with no argument, reads stdin when piped.`,
 		},
 	}
 	cmd.Flags().BoolVar(&opts.RequireRoot, "require-root", false, "Fail if the file has no root certificate")
+	cmd.Flags().BoolVar(&opts.Offline, "offline", false, "Don't fetch the issuer over AIA to check for a missing intermediate")
 	return cmd
 }
 

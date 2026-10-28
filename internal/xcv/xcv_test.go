@@ -9,6 +9,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -179,7 +181,7 @@ func TestValidate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePEM(t, tc.certs)
-			r, err := Validate(path, tc.opts)
+			r, err := Validate(t.Context(), path, tc.opts)
 			if err != nil {
 				t.Fatalf("Validate returned error: %v", err)
 			}
@@ -221,7 +223,7 @@ func TestRenderValidationResult_Notes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := Validate(writePEM(t, tc.certs), tc.opts)
+			r, err := Validate(t.Context(), writePEM(t, tc.certs), tc.opts)
 			if err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
@@ -261,7 +263,7 @@ func TestIsSelfSigned(t *testing.T) {
 		})
 	}
 
-	r, err := Validate(writePEM(t, []*x509.Certificate{selfIssued}), ValidateOptions{RequireRoot: true})
+	r, err := Validate(t.Context(), writePEM(t, []*x509.Certificate{selfIssued}), ValidateOptions{RequireRoot: true})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -271,7 +273,7 @@ func TestIsSelfSigned(t *testing.T) {
 }
 
 func TestValidate_NoSuchFile(t *testing.T) {
-	_, err := Validate(filepath.Join(t.TempDir(), "nonexistent.pem"), ValidateOptions{})
+	_, err := Validate(t.Context(), filepath.Join(t.TempDir(), "nonexistent.pem"), ValidateOptions{})
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -285,7 +287,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close temp file: %v", err)
 	}
-	_, err = Validate(f.Name(), ValidateOptions{})
+	_, err = Validate(t.Context(), f.Name(), ValidateOptions{})
 	if err == nil {
 		t.Fatal("expected error for empty PEM file, got nil")
 	}
@@ -295,7 +297,7 @@ func TestStripANSI(t *testing.T) {
 	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
 	leaf, _ := makeCert(t, "Leaf", false, root, rootKey)
 	path := writePEM(t, []*x509.Certificate{leaf, root})
-	r, err := Validate(path, ValidateOptions{})
+	r, err := Validate(t.Context(), path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -332,7 +334,7 @@ func TestValidate_ExpiredCert(t *testing.T) {
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}, nil, nil)
 	path := writePEM(t, []*x509.Certificate{cert})
-	r, err := Validate(path, ValidateOptions{})
+	r, err := Validate(t.Context(), path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -350,12 +352,20 @@ func TestValidate_ExtraUnrelatedCert(t *testing.T) {
 	unrelated, _ := makeCert(t, "Unrelated", true, nil, nil)
 	// file has leaf + root + unrelated — order check should fail
 	path := writePEM(t, []*x509.Certificate{leaf, root, unrelated})
-	r, err := Validate(path, ValidateOptions{})
+	r, err := Validate(t.Context(), path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	if r.Passed {
 		t.Error("expected Passed=false for extra cert, got true")
+	}
+	// The stray self-signed cert also signs nothing, but the longer chain wins.
+	var got []string
+	for _, c := range r.Ordered {
+		got = append(got, c.SubjectCN)
+	}
+	if want := []string{"Leaf", "Root CA"}; !slices.Equal(got, want) {
+		t.Errorf("Ordered = %v, want %v", got, want)
 	}
 }
 
@@ -915,7 +925,7 @@ func TestReorder(t *testing.T) {
 			if err := os.WriteFile(out, r.PEM(), 0o600); err != nil {
 				t.Fatalf("write output: %v", err)
 			}
-			v, err := Validate(out, ValidateOptions{RequireRoot: true})
+			v, err := Validate(t.Context(), out, ValidateOptions{RequireRoot: true})
 			if err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
@@ -931,5 +941,139 @@ func TestReorder(t *testing.T) {
 				t.Errorf("output order = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestCheckCompleteness(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	inter, interKey := makeCert(t, "Intermediate CA", true, root, rootKey)
+	stranger, _ := makeCert(t, "Stranger", true, nil, nil)
+
+	var fetches atomic.Int64
+	mux := http.NewServeMux()
+	serve := func(path string, body []byte) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	}
+	serve("/root.crt", root.Raw)
+	serve("/inter.crt", inter.Raw)
+	serve("/inter.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inter.Raw}))
+	serve("/stranger.crt", stranger.Raw)
+	serve("/junk", []byte("not a cert"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	// leaf signs a leaf under parent whose AIA points at the given paths.
+	leaf := func(parent *x509.Certificate, parentKey *ecdsa.PrivateKey, paths ...string) *x509.Certificate {
+		tmpl := &x509.Certificate{
+			SerialNumber: nextSerial(),
+			Subject:      pkix.Name{CommonName: "Leaf"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		for _, p := range paths {
+			tmpl.IssuingCertificateURL = append(tmpl.IssuingCertificateURL, srv.URL+p)
+		}
+		c, _ := signCert(t, tmpl, parent, parentKey)
+		return c
+	}
+	underInter := func(paths ...string) *x509.Certificate { return leaf(inter, interKey, paths...) }
+
+	tests := []struct {
+		name      string
+		chain     []*x509.Certificate
+		offline   bool
+		want      CompletenessStatus
+		wantStr   string // expected Root, Missing or Reason substring
+		wantFetch bool
+	}{
+		{"ends at root", []*x509.Certificate{underInter(), inter, root}, false, ChainComplete, "", false},
+		{"intermediates present", []*x509.Certificate{underInter("/root.crt"), inter}, false, ChainComplete, "", false},
+		{"self-signed leaf", []*x509.Certificate{root}, false, ChainComplete, "", false},
+		{"leaf under root", []*x509.Certificate{leaf(root, rootKey, "/root.crt")}, false, ChainComplete, "Root CA", true},
+		{"intermediate missing", []*x509.Certificate{underInter("/inter.crt")}, false, ChainIncomplete, "Intermediate CA", true},
+		{"intermediate missing, PEM", []*x509.Certificate{underInter("/inter.pem")}, false, ChainIncomplete, "Intermediate CA", true},
+		{"falls through to next URL", []*x509.Certificate{underInter("/missing", "/inter.crt")}, false, ChainIncomplete, "Intermediate CA", true},
+		{"no AIA", []*x509.Certificate{underInter()}, false, ChainUnknown, "no AIA", false},
+		{"offline", []*x509.Certificate{underInter("/inter.crt")}, true, ChainUnknown, "offline", false},
+		{"404", []*x509.Certificate{underInter("/missing")}, false, ChainUnknown, "404", true},
+		{"not a cert", []*x509.Certificate{underInter("/junk")}, false, ChainUnknown, "not a DER or PEM", true},
+		{"wrong issuer", []*x509.Certificate{underInter("/stranger.crt")}, false, ChainUnknown, "did not sign", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetches.Store(0)
+			parsed := buildCertDetails(tt.chain, make([]string, len(tt.chain)))
+			got := checkCompleteness(t.Context(), orderChainDetails(parsed), tt.offline)
+			if got.Status != tt.want {
+				t.Fatalf("Status = %v, want %v (%+v)", got.Status, tt.want, got)
+			}
+			if s := got.Root + got.Missing + got.Reason; !strings.Contains(s, tt.wantStr) {
+				t.Errorf("got %+v, want it to mention %q", got, tt.wantStr)
+			}
+			if (fetches.Load() > 0) != tt.wantFetch {
+				t.Errorf("fetched %d times, want fetch=%v", fetches.Load(), tt.wantFetch)
+			}
+		})
+	}
+}
+
+// TestValidate_Completeness covers the Validate wiring and rendering of the
+// AIA check; checkCompleteness itself is covered by TestCheckCompleteness.
+func TestValidate_Completeness(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	inter, interKey := makeCert(t, "Intermediate CA", true, root, rootKey)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(inter.Raw)
+	}))
+	t.Cleanup(srv.Close)
+
+	leaf, _ := signCert(t, &x509.Certificate{
+		SerialNumber:          nextSerial(),
+		Subject:               pkix.Name{CommonName: "Leaf"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{srv.URL + "/inter.crt"},
+	}, inter, interKey)
+	path := writePEM(t, []*x509.Certificate{leaf})
+
+	tests := []struct {
+		name       string
+		opts       ValidateOptions
+		wantPassed bool
+		wantOut    []string
+	}{
+		{"online", ValidateOptions{}, false, []string{
+			"FAIL", "missing intermediate Intermediate CA", "Fetch:  " + srv.URL + "/inter.crt",
+			"an intermediate certificate is missing from the file",
+		}},
+		{"offline", ValidateOptions{Offline: true}, true, []string{
+			"UNKNOWN", "only the leaf was sent", "(offline)",
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Validate(t.Context(), path, tc.opts)
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if r.Passed != tc.wantPassed {
+				t.Errorf("Passed = %v, want %v; FailReasons = %v", r.Passed, tc.wantPassed, r.FailReasons)
+			}
+			out := stripANSI(renderValidationResult(r, 80))
+			for _, w := range tc.wantOut {
+				if !strings.Contains(out, w) {
+					t.Errorf("output missing %q", w)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchIssuer_RejectsScheme(t *testing.T) {
+	if _, err := fetchIssuer(t.Context(), "ldap://ca.test/cn=issuer"); err == nil {
+		t.Error("expected error for ldap URL")
 	}
 }

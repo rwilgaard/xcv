@@ -237,6 +237,26 @@ func renderHostnameSection(sb *strings.Builder, host string, err error, width in
 	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
 }
 
+func renderCompletenessSection(sb *strings.Builder, c CompletenessCheck, ordered []*CertDetails, width int) {
+	fmt.Fprintf(sb, "%s\n", label("Chain Completeness"))
+	switch c.Status {
+	case ChainComplete:
+		detail := "Intermediates present."
+		switch {
+		case c.Root != "":
+			detail = fmt.Sprintf("Leaf is issued directly by the root (%s).", c.Root)
+		case !topIssuerAbsent(ordered):
+			detail = "Chain ends at a self-signed root."
+		}
+		fmt.Fprintf(sb, "  Result: %s\n  Detail: %s\n", sPass.Render("PASS"), detail)
+	case ChainIncomplete:
+		fmt.Fprintf(sb, "  Result: %s\n  Detail: missing intermediate %s\n  Fetch:  %s\n", sFail.Render("FAIL"), c.Missing, c.URL)
+	case ChainUnknown:
+		fmt.Fprintf(sb, "  Result: %s\n  Detail: only the leaf was sent; couldn't tell if its issuer is a root (%s)\n", sWarn.Render("UNKNOWN"), c.Reason)
+	}
+	fmt.Fprintf(sb, "%s\n\n", sepDash(width))
+}
+
 // compareStatusRender maps a diff position status to its badge text/style and
 // panel border style.
 var compareStatusRender = map[PositionStatus]struct {
@@ -286,6 +306,7 @@ func renderValidationResult(r *ValidationResult, width int) string {
 	renderChainStructureSection(&sb, r.Ordered, width)
 	renderCertBlocksSection(&sb, r.Statuses, width)
 	renderSigSection(&sb, len(r.Ordered), r.SignatureErr, width)
+	renderCompletenessSection(&sb, r.Completeness, r.Ordered, width)
 	renderOrderSection(&sb, "PEM File Order", "Physical order in file", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 	// A failed result already says why; the note only qualifies a pass.
 	var footerNotes []string
@@ -311,6 +332,7 @@ func renderCheckResult(r *CheckResult, width int) string {
 	renderCertBlocksSection(&sb, r.Statuses, width)
 	renderSigSection(&sb, len(r.Ordered), r.SignatureErr, width)
 	renderHostnameSection(&sb, r.Host, r.HostnameErr, width)
+	renderCompletenessSection(&sb, r.Completeness, r.Ordered, width)
 	renderOrderSection(&sb, "Server-Presented Order", "Physical order from server", r.Ordered, r.Order.Physical, r.Order.Correct, r.Order.Reasons)
 
 	var footerNotes []string
@@ -441,10 +463,7 @@ func PrintReorderNotes(r *ReorderResult) {
 	}
 	names := make([]string, len(r.Dropped))
 	for i, c := range r.Dropped {
-		names[i] = c.SubjectDN
-		if c.SubjectCN != "" {
-			names[i] = c.SubjectCN
-		}
+		names[i] = certName(c.Cert)
 	}
 	msg := fmt.Sprintf("Note: dropped %d certificate(s) not in the chain: %s", len(names), strings.Join(names, ", "))
 	if !NoColor {
