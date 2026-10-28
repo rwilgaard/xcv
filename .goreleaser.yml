@@ -68,7 +68,7 @@ homebrew_casks:
       shell_parameter_format: cobra
       shells: [bash, zsh, fish]
     hooks:
-      post:
+      pre:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/xcv"]

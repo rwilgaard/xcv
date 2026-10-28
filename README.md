@@ -21,6 +21,8 @@ Works on macOS, Linux, and Windows.
 brew install rwilgaard/tap/xcv
 ```
 
+Also available as a Nix package: [rwilgaard/nix-packages](https://github.com/rwilgaard/nix-packages).
+
 ### From source
 
 ```bash
