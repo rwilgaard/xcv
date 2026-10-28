@@ -30,6 +30,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoColor, "no-color", false, "Strip ANSI color codes from output")
 	rootCmd.PersistentFlags().BoolVar(&xcv.NoPager, "no-pager", false, "Print directly to stdout instead of opening a pager")
 	rootCmd.PersistentFlags().BoolVar(&xcv.Quiet, "quiet", false, "Suppress all output; rely on exit codes only")
+	rootCmd.PersistentFlags().BoolVarP(&xcv.Short, "short", "s", false, "Print a one-line-per-certificate summary")
 
 	rootCmd.AddCommand(newCheckCmd(), newShowCmd(), newValidateCmd(), newDiffCmd(), newMatchCmd(), newReorderCmd())
 

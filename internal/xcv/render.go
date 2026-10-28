@@ -13,6 +13,7 @@ var (
 	NoColor bool
 	NoPager bool
 	Quiet   bool
+	Short   bool
 )
 
 var (
@@ -415,14 +416,26 @@ func renderDiffResult(r *DiffResult, width int) string {
 }
 
 func PrintValidationResult(r *ValidationResult) {
+	if Short {
+		display(func(int) string { return renderShortValidationResult(r) })
+		return
+	}
 	display(func(w int) string { return renderValidationResult(r, w) })
 }
 
 func PrintCheckResult(r *CheckResult) {
+	if Short {
+		display(func(int) string { return renderShortCheckResult(r) })
+		return
+	}
 	display(func(w int) string { return renderCheckResult(r, w) })
 }
 
 func PrintShowResult(r *ShowResult) {
+	if Short {
+		display(func(int) string { return renderShortShowResult(r) })
+		return
+	}
 	display(func(w int) string { return renderShowResult(r, w) })
 }
 

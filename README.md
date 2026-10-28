@@ -44,7 +44,7 @@ make uninstall
 ## Usage
 
 ```
-xcv [--no-color] [--no-pager] [--quiet] [--version] <subcommand> [flags] <args>
+xcv [--no-color] [--no-pager] [--quiet] [--short] [--version] <subcommand> [flags] <args>
 ```
 
 Global flags work before or after the subcommand.
@@ -56,6 +56,7 @@ Global flags work before or after the subcommand.
 | `--no-color` | Strip ANSI color codes (useful for log files and CI) |
 | `--no-pager` | Print directly to stdout instead of opening a pager |
 | `--quiet` | Suppress all output; rely on exit codes only |
+| `-s`, `--short` | One line per certificate (role, validity, days left, SHA-256 fingerprint prefix, CN) plus a summary of the checks; applies to `check`, `validate` and `show` |
 | `--version` | Print version and exit |
 | `--help` | Show help |
 

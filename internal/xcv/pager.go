@@ -93,7 +93,7 @@ func display(renderFn func(width int) string) {
 		return
 	}
 	tty := isTerminal(os.Stdout)
-	if tty && !NoColor && !NoPager {
+	if tty && !NoColor && !NoPager && !Short {
 		if in, err := pagerKeyInput(); err == nil {
 			var opts []tea.ProgramOption
 			if in != nil {

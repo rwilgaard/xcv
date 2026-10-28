@@ -410,6 +410,8 @@ func TestRenderers(t *testing.T) {
 		{"diff", func(w int) string { return renderDiffResult(diff, w) }, "Certificate Chain Comparison"},
 		{"check", func(w int) string { return renderCheckResult(check, w) }, "TLS Certificate Check"},
 		{"match", func(w int) string { return renderMatchResult(match, w) }, "Certificate Key Match"},
+		{"short show", func(int) string { return renderShortShowResult(show) }, "2 certificate(s)"},
+		{"short check", func(int) string { return renderShortCheckResult(check) }, "example.com:443  PASS"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1075,5 +1077,44 @@ func TestValidate_Completeness(t *testing.T) {
 func TestFetchIssuer_RejectsScheme(t *testing.T) {
 	if _, err := fetchIssuer(t.Context(), "ldap://ca.test/cn=issuer"); err == nil {
 		t.Error("expected error for ldap URL")
+	}
+}
+
+func TestRenderShortValidationResult(t *testing.T) {
+	root, rootKey := makeCert(t, "Root CA", true, nil, nil)
+	leaf, _ := makeCert(t, "example.com", false, root, rootKey)
+
+	tests := []struct {
+		name  string
+		certs []*x509.Certificate
+		want  []string
+	}{
+		{
+			name:  "valid chain",
+			certs: []*x509.Certificate{leaf, root},
+			want:  []string{"PASS", "Leaf", "example.com", "Root", "signatures ✓", "completeness ✓", "order ✓"},
+		},
+		{
+			name:  "wrong order",
+			certs: []*x509.Certificate{root, leaf},
+			want:  []string{"FAIL", "order ✗", "Reasons: the physical order"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Validate(t.Context(), writePEM(t, tc.certs), ValidateOptions{})
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			out := stripANSI(renderShortValidationResult(r))
+			for _, w := range tc.want {
+				if !strings.Contains(out, w) {
+					t.Errorf("output missing %q:\n%s", w, out)
+				}
+			}
+			if fp := r.Ordered[0].Fingerprint[:shortFingerprintLen]; !strings.Contains(out, fp) {
+				t.Errorf("output missing leaf fingerprint %q", fp)
+			}
+		})
 	}
 }
