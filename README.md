@@ -15,6 +15,12 @@ Works on macOS, Linux, and Windows.
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install rwilgaard/tap/xcv
+```
+
 ### From source
 
 ```bash
