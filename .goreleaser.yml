@@ -69,9 +69,9 @@ homebrew_casks:
       shells: [bash, zsh, fish]
     hooks:
       pre:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/xcv"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/xcv"]
           end
     repository:
       owner: rwilgaard
