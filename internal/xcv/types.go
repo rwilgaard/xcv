@@ -50,6 +50,7 @@ type ValidationResult struct {
 	Statuses     []CertStatus
 	SignatureErr error
 	Order        OrderCheckResult
+	Completeness CompletenessCheck
 	RootPresent  bool
 	Passed       bool
 	// FailReasons lists human-readable reasons when Passed == false.
@@ -84,6 +85,7 @@ type CheckResult struct {
 	SignatureErr error
 	HostnameErr  error
 	Order        OrderCheckResult
+	Completeness CompletenessCheck
 	RootPresent  bool
 	Passed       bool
 	FailReasons  []string
@@ -125,4 +127,22 @@ type ReorderResult struct {
 	// Dropped lists certificates in the file that are not part of the chain,
 	// including duplicates.
 	Dropped []*CertDetails
+}
+
+type CompletenessStatus int
+
+const (
+	ChainComplete CompletenessStatus = iota
+	ChainIncomplete
+	ChainUnknown
+)
+
+// CompletenessCheck is the outcome of checking whether a leaf-only chain is
+// missing its intermediate.
+type CompletenessCheck struct {
+	Status  CompletenessStatus
+	Root    string // fetched root of a leaf-only chain; "" when nothing was fetched
+	Missing string // the missing intermediate, when Status == ChainIncomplete
+	URL     string // where Missing was fetched from
+	Reason  string // why, when Status == ChainUnknown
 }
