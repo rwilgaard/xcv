@@ -24,7 +24,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v32
 
       - uses: goreleaser/goreleaser-action@v7
         with:
